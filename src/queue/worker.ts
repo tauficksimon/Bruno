@@ -1,0 +1,66 @@
+import pino from "pino";
+import { env } from "../config/env.js";
+import { claimNextJob, completeJob, failJob, type QueueJob } from "./queue.js";
+import { processInstantlyEventJob } from "../jobs/processInstantlyEvent.js";
+import { processDailyDigestJob } from "../jobs/processDailyDigest.js";
+import { processWeeklyAnalyticsJob } from "../jobs/processWeeklyAnalytics.js";
+
+const logger = pino({ name: "worker" });
+
+export async function processJob(job: QueueJob) {
+  switch (job.name) {
+    case "instantly.event.received":
+      await processInstantlyEventJob(job);
+      return;
+    case "daily.digest":
+      await processDailyDigestJob(job);
+      return;
+    case "weekly.analytics":
+      await processWeeklyAnalyticsJob(job);
+      return;
+    case "reply.classify":
+    case "lead.score":
+      logger.info({ jobId: job.id, jobName: job.name }, "job type reserved for future direct processing");
+      return;
+    default:
+      throw new Error(`Unhandled job: ${String(job.name)}`);
+  }
+}
+
+export function startWorkerLoop() {
+  let stopped = false;
+
+  async function tick() {
+    if (stopped) return;
+
+    const jobs = await Promise.all(
+      Array.from({ length: env.WORKER_CONCURRENCY }, () => claimNextJob())
+    );
+
+    await Promise.all(
+      jobs
+        .filter((job): job is QueueJob => job !== null)
+        .map(async (job) => {
+          try {
+            logger.info({ jobId: job.id, jobName: job.name }, "processing job");
+            await processJob(job);
+            await completeJob(job.id);
+          } catch (error) {
+            logger.error({ error, jobId: job.id, jobName: job.name }, "job failed");
+            await failJob(job, error);
+          }
+        })
+    );
+  }
+
+  const interval = setInterval(() => {
+    tick().catch((error) => logger.error({ error }, "worker tick failed"));
+  }, env.WORKER_POLL_INTERVAL_MS);
+
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(interval);
+    }
+  };
+}

@@ -1,0 +1,10 @@
+{
+  "id": "evt_mock_bounce_001",
+  "event_type": "email_bounced",
+  "data": {
+    "lead_id": "lead_mock_002",
+    "campaign_id": "campaign_mock_nearshore",
+    "email": "bad@example.com",
+    "company_name": "Bad Email LLC"
+  }
+}

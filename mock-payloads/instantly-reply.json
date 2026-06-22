@@ -1,0 +1,11 @@
+{
+  "id": "evt_mock_reply_001",
+  "event_type": "reply_received",
+  "data": {
+    "lead_id": "lead_mock_001",
+    "campaign_id": "campaign_mock_nearshore",
+    "email": "jane@example.com",
+    "company_name": "Acme Logistics",
+    "reply_text": "This is interesting. Can you send me more info and maybe we can talk next week?"
+  }
+}
