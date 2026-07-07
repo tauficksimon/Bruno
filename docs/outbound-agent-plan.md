@@ -16,8 +16,8 @@ _"Draft a response to this one and show me."_ The boss asks **the agent**, not t
 ## 2. What already exists (we reuse it)
 
 - **Job queue + worker** (Postgres-backed, retries, dedupe).
-- **Reply pipeline** (`src/jobs/processInstantlyEvent.ts`): classify → draft → HubSpot note →
-  stop sequence → Slack alert.
+- **Reply pipeline** (`src/jobs/processInstantlyEvent.ts`): classify → draft → Instantly CRM/status
+  update where appropriate → Slack alert.
 - **Two agents**: `classifyReply` (Haiku) and `draftReply` (Sonnet 5).
 - **Instantly integration**: list campaigns/accounts, create/patch/pause campaign.
 - **Slack posting** via `@slack/web-api`; env already has `SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET`.

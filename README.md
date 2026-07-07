@@ -8,10 +8,10 @@ Local scaffold for the always-on AI SDR operations layer.
 Apollo -> Instantly -> Webhooks -> Postgres queue -> Workers
                                              |
                                              v
-                         Claude + HubSpot + Slack + Postgres
+                         Claude + Instantly CRM + Slack + Postgres
 ```
 
-The backend does not send cold email directly. Instantly owns sequencing and delivery. The agent handles scoring, reply classification, CRM documentation, Slack notifications, drafts, metrics, and reliability.
+The backend does not send cold email directly. Instantly owns sequencing, delivery, replies, and CRM state. The agent handles scoring, reply classification, Slack notifications, drafts, metrics, and reliability.
 
 ## What Is In This Scaffold
 
@@ -21,7 +21,7 @@ The backend does not send cold email directly. Instantly owns sequencing and del
 - Instantly webhook endpoint
 - Worker loop with retry-safe processing
 - Claude wrapper
-- HubSpot / Instantly / Apollo / Slack integration wrappers
+- Instantly / Apollo / Slack integration wrappers
 - Agent modules for scoring, reply intent, drafting, analytics
 - Mock webhook payloads
 - `.env.example`
@@ -88,6 +88,6 @@ This is the local foundation. Railway/Fly/Cloud Run is only needed when we deplo
 - Events should be stored before processing.
 - Jobs should be retried safely.
 - Claude should only handle judgment tasks.
-- HubSpot remains the source of truth.
+- Instantly remains the CRM/source of truth for leads and outreach state.
 - Postgres stores operational memory.
 - Slack is the control center.

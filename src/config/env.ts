@@ -12,8 +12,6 @@ const envSchema = z.object({
   CLAUDE_FAST_MODEL: z.string().default("claude-haiku-4-5"),
   CLAUDE_STRONG_MODEL: z.string().default("claude-haiku-4-5"),
 
-  HUBSPOT_PRIVATE_APP_TOKEN: z.string().optional(),
-
   INSTANTLY_API_KEY: z.string().optional(),
   INSTANTLY_WEBHOOK_SECRET: z.string().optional(),
 

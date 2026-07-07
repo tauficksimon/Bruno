@@ -42,8 +42,8 @@ Everything below is justified by one of these five.
 - **One boring monolith.** Node/TS + Fastify + Postgres on Railway, worker in-process. At
   ~2,000 leads/month and <200 replies/month this is *overwhelmingly* sufficient. Splitting
   services would add failure modes, not capacity.
-- **Buy the commodity, build the brain.** Instantly does sending/warmup/rotation; Apollo does
-  lead data; HubSpot does CRM; Slack is the UI. We build only the intelligence layer
+- **Buy the commodity, build the brain.** Instantly does sending/warmup/rotation and CRM state;
+  Apollo does lead data; Slack is the UI. We build only the intelligence layer
   (classify, draft, score, converse) and the glue.
 - **Human-in-the-loop exactly once per money moment.** The agent drafts; a human taps
   *Approve* before anything is sent to a prospect. Everything else (classifying, logging,
@@ -62,10 +62,9 @@ Everything below is justified by one of these five.
   Apollo API ──────────▶│  Fastify server ── cron ── worker loop     │
                         │      │            │           │            │
   Instantly API ◀──────▶│  webhooks     schedules    jobs (queue)    │
-   (send, leads,        │  /slack/events  reply.poll  classify/draft │
+   (send, leads, CRM,   │  /slack/events  reply.poll  classify/draft │
     replies, analytics) │                 metrics.rollup  agent.reply│
-                        │                 digest/weekly  hubspot.sync│
-  HubSpot API ◀─────────│                                            │
+                        │                 digest/weekly  watchdog    │
                         │              Postgres                      │
   Slack  ◀─────────────▶│  events · jobs · reply_classifications ·   │
    (boss chat,          │  drafts · approvals · lead_scores ·        │
@@ -112,7 +111,7 @@ reply.poll (cron 3–5 min, uses listRecentReplies)
   → dedupe (events table) → classify (Haiku) → draft (Sonnet)
   → Slack #agent-hot-replies: reply summary + draft + [Approve & Send] [Edit] [Reject]
   → Approve → POST /api/v2/emails/reply (Instantly) → drafts.status='sent' + approvals row
-  → stop sequence for that lead (real endpoint) → HubSpot note
+  → update Instantly CRM interest/status + stop sequence/suppress where appropriate
 ```
 - Speed-to-lead: poll every 3 min + instant Slack push ⇒ human can approve inside minutes
   from a phone. This beats the <1hr benchmark without autonomous sending risk.
@@ -122,13 +121,15 @@ reply.poll (cron 3–5 min, uses listRecentReplies)
   outreach).
 - Prompt-injection hardening (audit M5): prospect text is always framed as untrusted data.
 
-### 4.4 CRM (HubSpot)
-**Today:** stub note, attached to nothing.
-**Target (deliberately thin):** on classified reply — upsert contact by email → attach note
-(classification + draft + thread) → for `positive` intent, create/update a deal in a
-"Meeting requested" stage. `hubspot_mappings` table already exists for the ID links. That's
-it — no two-way sync, no property mirroring. HubSpot is the system of record for *people and
-deals*; Postgres remains the system of record for *events and metrics*.
+### 4.4 CRM (Instantly)
+**Decision update:** Kinta will not use HubSpot for this workflow. Instantly is the CRM/source
+of truth for leads, interest status, replies, sending state, and suppression. Postgres remains
+the agent's operational memory for events, classifications, drafts, approvals, metrics, and
+learning signals.
+
+**Target (deliberately thin):** on classified reply — update Instantly lead interest/status
+where appropriate, suppress explicit opt-outs/negative replies through Instantly block lists,
+and keep the full audit trail in Postgres. No HubSpot sync is planned.
 
 ### 4.5 Metrics & the learning loop
 **Today:** `metrics_daily` empty; weekly analytics posts placeholder junk through Sonnet (audit L3).
@@ -272,13 +273,13 @@ The CRM is real and the agent starts learning.
 
 | # | Work item | Source |
 |---|---|---|
-| C1 | HubSpot real wiring: upsert contact → note → deal on `positive` (uses `hubspot_mappings`) | plan §4.4 |
+| C1 | Instantly CRM wiring: interest/status labels, lead notes/CRM fields where the API supports them, plus Postgres audit records | plan §4.4 |
 | C2 | Migration: `agent_lessons` + learned prompt layer + chat teaching ("remember…"/"forget…") | AD§2.4, §5.4 |
 | C3 | Weekly retro on real data: trends vs 3% rule, edit-diff review → proposed lessons, classification spot-check, autonomy report with graduation proposals | AD§4.3, §5.1 |
 | C4 | Objection library: SQL retrieval of past objection→approved-response pairs into drafting exemplars | AD§5.2 |
 | C5 | `not_now` nurture: 60–90d resurface notes + CRM logging | AD§4.1 |
 
-*Done when:* boss runs the operation entirely from Slack; every reply exists in HubSpot;
+*Done when:* boss runs the operation entirely from Slack; every reply exists in Instantly/Postgres;
 the retro cites at least one learned lesson from real edit-diffs.
 
 ### Phase D — Scale (gated on the 3% rule firing) · ongoing

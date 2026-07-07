@@ -200,7 +200,7 @@ graduation.
   the agent itself never claims to be human in team-facing surfaces; whether prospect-facing
   sends disclose AI assistance is a business decision to make before graduation past T3
   (flagged, not assumed).
-- **Data minimization:** prospect data stays in Postgres/HubSpot/Instantly — the agent never
+- **Data minimization:** prospect data stays in Postgres/Instantly — the agent never
   echoes full lead lists into Slack channels beyond what a question requires.
 
 ---

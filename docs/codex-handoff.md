@@ -14,8 +14,8 @@ and safety matter more than speed.
 
 An **AI SDR agent** for Kinta (nearshore staffing — places bilingual Central-American
 professionals with US companies at ~half local cost). It runs cold-email outbound via
-**Instantly.ai** (API v2). It classifies/drafts replies with **Claude**, logs to **HubSpot**,
-and is operated from **Slack** — the boss chats with the agent and taps to approve drafts. It
+**Instantly.ai** (API v2). It classifies/drafts replies with **Claude**, uses **Instantly CRM**
+as the outreach source of truth, and is operated from **Slack** — the boss chats with the agent and taps to approve drafts. It
 runs as one Node/Fastify monolith on **Railway** with a **Postgres**-backed job queue and an
 in-process worker. Philosophy: *code handles deterministic workflow, Claude handles judgment,
 Postgres handles memory, humans approve anything that touches a prospect.*

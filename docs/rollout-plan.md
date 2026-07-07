@@ -14,7 +14,7 @@ We've built the "brain and bookkeeping" layer that sits on top of Kinta's outbou
 email. It does **not** send email — Instantly does that. When a prospect replies,
 this system reads the reply, decides what kind of reply it is (interested? a question?
 not interested?), drafts a suggested response, writes a clean record into the CRM
-(HubSpot), and pings the team in Slack. The core machine is already built and deployed.
+(Instantly CRM/Postgres), and pings the team in Slack. The core machine is already built and deployed.
 What's left is (a) connecting it to the real accounts and (b) finishing a few pieces
 that are currently placeholders. **There's no time pressure right now**, because the
 business hasn't started sending email yet.
@@ -51,10 +51,10 @@ The hard, easy-to-get-wrong foundation is done and deployed on Railway:
 - **A reliable job queue** (in Postgres) — work is never lost, retries automatically
   if something fails, and won't process the same reply twice.
 - **The reply-handling pipeline** — receive a reply → classify intent → draft a
-  response (for hot replies) → write a HubSpot note → stop the sequence → alert Slack.
+  response (for hot replies) → update Instantly CRM/status where appropriate → alert Slack.
 - **Claude integration** — classifies replies and writes drafts, with a simple
   keyword fallback so it still runs even before the Claude key is added.
-- **Integration wrappers** for HubSpot, Instantly, Slack, and Apollo.
+- **Integration wrappers** for Instantly, Slack, and Apollo.
 - **Webhook endpoint + signature checking**, scheduled jobs (daily digest, weekly
   analytics), health checks, and a Docker/Railway deploy.
 
@@ -67,16 +67,15 @@ done before "real" launch:
 
 1. **No way to hear about replies without paid webhooks.** This is the biggest one —
    see the decision in Section 5.
-2. **HubSpot logging is a stub.** Right now it drops a note that isn't attached to any
-   contact, company, or deal. The real logic (find/create the contact, the company,
-   the deal, attach the note) isn't written yet.
+2. **CRM source changed.** Kinta will use Instantly CRM, not HubSpot. The launch path is
+   Instantly lead interest/status + block lists, with Postgres as the agent audit trail.
 3. **The Instantly "stop sequence" and "suppress lead" calls are guesses.** They need
    to be pointed at the real v2 API endpoints.
 4. **No failure alerts.** If a job fails for good, it currently fails silently. Before
    real leads flow, failures should shout in Slack.
 5. **Lead scoring and analytics** exist as modules but aren't wired into live flow yet
    (later phases).
-6. **Missing API keys:** Claude (Anthropic), HubSpot, Slack are not connected yet.
+6. **Missing API keys:** Claude (Anthropic) and Slack are not connected yet.
 
 ---
 
@@ -119,12 +118,11 @@ as an admin/owner using our email. That's it. We handle every technical step fro
 | # | Account | New or existing? | Why it matters | Needed for launch? |
 | --- | --- | --- | --- | --- |
 | 1 | **Instantly** | Existing ✅ | Sends email + is the source of replies. The engine. | Yes |
-| 2 | **HubSpot** | Likely existing | The CRM — clean source of truth for all activity. | Yes |
-| 3 | **Anthropic (Claude)** | **New** | The brain — classifies replies, writes drafts. Billed per use; client's card. | Yes |
-| 4 | **Railway (hosting)** | New (we set up) | Where the app runs + the database lives. | Yes |
-| 5 | **Slack** | Workspace likely exists | The team's control center for alerts/approvals. | Yes |
-| 6 | **Apollo** | Likely existing | Lead source for the scoring phase. | Later |
-| 7 | **Sentry** | New, optional | Error monitoring. Nice-to-have. | Optional |
+| 2 | **Anthropic (Claude)** | **New** | The brain — classifies replies, writes drafts. Billed per use; client's card. | Yes |
+| 3 | **Railway (hosting)** | New (we set up) | Where the app runs + the database lives. | Yes |
+| 4 | **Slack** | Workspace likely exists | The team's control center for alerts/approvals. | Yes |
+| 5 | **Apollo** | Likely existing | Lead source for the scoring phase. | Later |
+| 6 | **Sentry** | New, optional | Error monitoring. Nice-to-have. | Optional |
 
 **The realistically "new" accounts the client must create: Anthropic, Slack app,
 and Railway.** Everything else they already own — they just invite us.
@@ -167,12 +165,12 @@ real Instantly v2 API. Done now while there's no time pressure.
 _Risk: low. Needs: the (rotated) Instantly key._
 
 ### Step 3 — Finish the real integrations
-Wire HubSpot to actually create/update the contact, company, and deal and attach the
-note. Point the Instantly "stop sequence" / "suppress" calls at the real endpoints.
-_Risk: medium — this is the fiddly CRM-hygiene work. Needs: HubSpot admin access._
+Wire the Instantly CRM/status fields we need and point the Instantly "stop sequence" /
+"suppress" calls at the real endpoints.
+_Risk: medium — this is the fiddly CRM-hygiene work. Needs the Instantly API key and plan._
 
 ### Step 4 — Connect the remaining keys
-Add Claude (Anthropic), HubSpot, and Slack so the app runs at full quality.
+Add Claude (Anthropic) and Slack so the app runs at full quality.
 _Risk: low. Needs: those three accounts + admin access._
 
 ### Step 5 — Add failure alerts + hardening
@@ -194,7 +192,7 @@ minutes:
 2. Claude reads it and decides: interested / question / objection / not now / not
    interested / unsubscribe / unclear.
 3. If it's a hot reply, Claude drafts a suggested response.
-4. The system writes a clean record into HubSpot (contact, company, deal, note).
+4. The system updates Instantly CRM/status where appropriate and stores the audit trail in Postgres.
 5. It stops the cold sequence so the prospect doesn't keep getting cold emails.
 6. The team gets a Slack message: "Hot reply from [Company] — interested. Here's a
    draft response." A human reviews, edits if needed, and sends.
@@ -208,7 +206,7 @@ The human still closes. The system keeps everything organized, documented, and f
 1. **Account ownership** — confirm all accounts sit under Kinta, with us as admins.
 2. **Approval level** — should the team approve *every* drafted reply, or only certain
    types? (Recommended at launch: approve everything, loosen later.)
-3. **HubSpot pipeline stages** — confirm the deal stages the system should use.
+3. **Instantly CRM statuses/labels** — confirm how Kinta wants interested, not-now, negative, and booked-call states represented.
 4. **Slack channels** — confirm the channel names for hot replies, approvals, errors,
    digests.
 5. **When does the first campaign launch?** — that sets the real deadline.

@@ -4,7 +4,6 @@ import { activateAlertOnce, clearAlertOnce, isAgentPaused } from "../db/config.j
 import { markEventProcessed } from "../db/events.js";
 import { saveDraft, saveReplyClassification } from "../db/replyRecords.js";
 import { saveSuppression } from "../db/suppressions.js";
-import { upsertReplyContext } from "../integrations/hubspot.js";
 import { stopLeadSequence, suppressLead } from "../integrations/instantly.js";
 import { postHotReply, postError } from "../integrations/slack.js";
 import { enqueueJob, type QueueJob } from "../queue/queue.js";
@@ -79,14 +78,6 @@ export async function processInstantlyEventJob(job: QueueJob) {
       draft
     });
   }
-
-  await upsertReplyContext({
-    email: event.email,
-    companyName: event.companyName,
-    classification,
-    draft,
-    rawThread: threadText
-  });
 
   if (classification.intent === "unsubscribe" || classification.intent === "negative") {
     await saveSuppression({
