@@ -2,10 +2,14 @@ import { pool } from "../db/pool.js";
 
 export type JobName =
   | "instantly.event.received"
+  | "reply.poll"
   | "reply.classify"
   | "lead.score"
+  | "metrics.rollup"
+  | "watchdog.check"
   | "daily.digest"
-  | "weekly.analytics";
+  | "weekly.analytics"
+  | "outbound.agent.reply";
 
 export interface QueueJob<T = unknown> {
   id: string;
@@ -45,9 +49,10 @@ export async function claimNextJob(): Promise<QueueJob | null> {
       WHERE id = (
         SELECT id
         FROM jobs
-        WHERE status IN ('queued', 'failed')
-          AND run_after <= now()
-          AND attempts < max_attempts
+        WHERE (
+            (status IN ('queued', 'failed') AND run_after <= now() AND attempts < max_attempts)
+            OR (status = 'running' AND locked_at < now() - interval '10 minutes' AND attempts <= max_attempts)
+          )
         ORDER BY run_after ASC, created_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
@@ -97,4 +102,6 @@ export async function failJob(job: QueueJob, error: unknown) {
     `,
     [job.id, shouldRetry ? "queued" : "failed", message, backoffSeconds]
   );
+
+  return { willRetry: shouldRetry };
 }

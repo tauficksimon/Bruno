@@ -10,7 +10,7 @@ const leadScoreSchema = z.object({
 });
 
 const SYSTEM_PROMPT = `
-You score sales leads for a nearshore staffing company in Honduras selling to US companies.
+You score sales leads for a nearshore staffing company in Central America selling to US companies.
 
 Prefer companies with active hiring signals, clear roles that can be staffed remotely/nearshore, and enough business maturity to buy services.
 Return JSON only.

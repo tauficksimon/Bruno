@@ -15,6 +15,20 @@ export async function postSlackMessage(channel: string, text: string) {
   });
 }
 
+/** Post a message, optionally threaded under a parent message. */
+export async function postSlackReply(channel: string, text: string, threadTs?: string) {
+  if (!slack) {
+    console.log(`[slack:${channel}${threadTs ? `:${threadTs}` : ""}] ${text}`);
+    return;
+  }
+
+  await slack.chat.postMessage({
+    channel,
+    text,
+    thread_ts: threadTs
+  });
+}
+
 export async function postHotReply(text: string) {
   await postSlackMessage(env.SLACK_CHANNEL_HOT_REPLIES, text);
 }

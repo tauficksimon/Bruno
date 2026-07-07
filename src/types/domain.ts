@@ -40,9 +40,3 @@ export interface LeadScore {
   reason: string;
   recommendedCampaign?: string;
 }
-
-export interface HubSpotUpsertResult {
-  contactId?: string;
-  companyId?: string;
-  dealId?: string;
-}
