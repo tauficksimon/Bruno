@@ -66,8 +66,10 @@ Then read the code: `src/server.ts`, `src/queue/{queue,worker}.ts`, `src/webhook
 - **Stack pins:** Anthropic SDK `@anthropic-ai/sdk` 0.105.0; **zod is v3** (`^3.24.1`). The
   SDK's `zodOutputFormat`/structured-outputs helper targets **zod v4 — do not use it** (it
   ripples through every schema). Stick with the prompt-based `callClaudeJson` approach.
-- **Models:** `CLAUDE_FAST_MODEL=claude-haiku-4-5` (classify/score), `CLAUDE_STRONG_MODEL=claude-sonnet-5`
-  (draft/converse). Both verified working. The tool-loop sets `thinking: {type:"disabled"}`.
+- **Models:** current defaults are `CLAUDE_FAST_MODEL=claude-haiku-4-5` and
+  `CLAUDE_STRONG_MODEL=claude-haiku-4-5` to keep testing cheap. Set
+  `CLAUDE_STRONG_MODEL=claude-sonnet-5` when draft/conversation quality matters. Both verified
+  working. The tool-loop sets `thinking: {type:"disabled"}`.
 - **Instantly API v2:** base `https://api.instantly.ai`. **Full OpenAPI spec:**
   `https://api.instantly.ai/openapi/api_v2.json` — fetch it and grep it before using any
   endpoint; several were guessed wrong originally.
