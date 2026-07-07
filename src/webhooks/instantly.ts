@@ -1,14 +1,14 @@
 import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { IncomingHttpHeaders } from "node:http";
-import { env } from "../config/env.js";
+import { env, isProduction } from "../config/env.js";
 import { recordEvent } from "../db/events.js";
 import { enqueueJob } from "../queue/queue.js";
 import { normalizeInstantlyEvent } from "./normalizeInstantlyEvent.js";
 
 export async function registerInstantlyWebhook(app: FastifyInstance) {
   app.post("/webhooks/instantly", async (request, reply) => {
-    const rawBody = JSON.stringify(request.body ?? {});
+    const rawBody = (request as unknown as { rawBody?: string }).rawBody ?? "";
 
     if (!verifyInstantlySignature(rawBody, request.headers)) {
       return reply.code(401).send({ error: "invalid signature" });
@@ -34,7 +34,7 @@ export async function registerInstantlyWebhook(app: FastifyInstance) {
 }
 
 function verifyInstantlySignature(rawBody: string, headers: IncomingHttpHeaders) {
-  if (!env.INSTANTLY_WEBHOOK_SECRET) return true;
+  if (!env.INSTANTLY_WEBHOOK_SECRET) return !isProduction;
 
   const signature = String(headers["x-instantly-signature"] ?? "");
   if (!signature) return false;

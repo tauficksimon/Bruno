@@ -11,6 +11,22 @@ import { registerSlackWebhook } from "./webhooks/slack.js";
 const logger = pino({ name: "server" });
 const app = Fastify({ logger: true });
 
+// Preserve the raw JSON body so webhook signatures (e.g. Slack) can be verified
+// against the exact bytes Slack signed, while still parsing JSON for handlers.
+app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
+  const raw = typeof body === "string" ? body : body.toString();
+  (req as unknown as { rawBody?: string }).rawBody = raw;
+  if (raw.length === 0) {
+    done(null, {});
+    return;
+  }
+  try {
+    done(null, JSON.parse(raw));
+  } catch (error) {
+    done(error as Error);
+  }
+});
+
 app.get("/health", async () => ({
   ok: true,
   service: "ai-sdr-agent",
@@ -19,6 +35,18 @@ app.get("/health", async () => ({
 
 await registerInstantlyWebhook(app);
 await registerSlackWebhook(app);
+
+cron.schedule("*/5 * * * *", async () => {
+  await enqueueJob("reply.poll", { scheduledAt: new Date().toISOString() });
+});
+
+cron.schedule("*/15 * * * *", async () => {
+  await enqueueJob("watchdog.check", { scheduledAt: new Date().toISOString() });
+});
+
+cron.schedule("55 23 * * *", async () => {
+  await enqueueJob("metrics.rollup", { scheduledAt: new Date().toISOString() });
+});
 
 cron.schedule("0 8 * * 1-5", async () => {
   await enqueueJob("daily.digest", { scheduledAt: new Date().toISOString() });

@@ -4,6 +4,11 @@ import { claimNextJob, completeJob, failJob, type QueueJob } from "./queue.js";
 import { processInstantlyEventJob } from "../jobs/processInstantlyEvent.js";
 import { processDailyDigestJob } from "../jobs/processDailyDigest.js";
 import { processWeeklyAnalyticsJob } from "../jobs/processWeeklyAnalytics.js";
+import { processOutboundAgentReplyJob } from "../jobs/processOutboundAgentReply.js";
+import { processReplyPollJob } from "../jobs/processReplyPoll.js";
+import { processMetricsRollupJob } from "../jobs/processMetricsRollup.js";
+import { processWatchdogJob } from "../jobs/processWatchdog.js";
+import { postError, postSlackReply } from "../integrations/slack.js";
 
 const logger = pino({ name: "worker" });
 
@@ -12,11 +17,23 @@ export async function processJob(job: QueueJob) {
     case "instantly.event.received":
       await processInstantlyEventJob(job);
       return;
+    case "reply.poll":
+      await processReplyPollJob(job);
+      return;
+    case "metrics.rollup":
+      await processMetricsRollupJob(job);
+      return;
+    case "watchdog.check":
+      await processWatchdogJob(job);
+      return;
     case "daily.digest":
       await processDailyDigestJob(job);
       return;
     case "weekly.analytics":
       await processWeeklyAnalyticsJob(job);
+      return;
+    case "outbound.agent.reply":
+      await processOutboundAgentReplyJob(job);
       return;
     case "reply.classify":
     case "lead.score":
@@ -47,7 +64,10 @@ export function startWorkerLoop() {
             await completeJob(job.id);
           } catch (error) {
             logger.error({ error, jobId: job.id, jobName: job.name }, "job failed");
-            await failJob(job, error);
+            const { willRetry } = await failJob(job, error);
+            if (!willRetry) {
+              await notifyTerminalFailure(job, error);
+            }
           }
         })
     );
@@ -63,4 +83,15 @@ export function startWorkerLoop() {
       clearInterval(interval);
     }
   };
+}
+
+async function notifyTerminalFailure(job: QueueJob, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  await postError(`Job failed permanently: ${job.name} (${job.id}) after ${job.attempts}/${job.maxAttempts} attempts.\n${message}`);
+
+  if (job.name !== "outbound.agent.reply") return;
+  const payload = job.payload as { channel?: string; threadTs?: string };
+  if (payload.channel) {
+    await postSlackReply(payload.channel, "I hit an internal error while answering that. The failure was posted to #agent-errors.", payload.threadTs);
+  }
 }

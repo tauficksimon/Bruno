@@ -10,7 +10,7 @@ const envSchema = z.object({
 
   ANTHROPIC_API_KEY: z.string().optional(),
   CLAUDE_FAST_MODEL: z.string().default("claude-haiku-4-5"),
-  CLAUDE_STRONG_MODEL: z.string().default("claude-sonnet-4-6"),
+  CLAUDE_STRONG_MODEL: z.string().default("claude-sonnet-5"),
 
   HUBSPOT_PRIVATE_APP_TOKEN: z.string().optional(),
 

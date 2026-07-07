@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pool, closePool } from "./pool.js";
 
-const migrationFiles = ["001_initial.sql"];
+const migrationFiles = ["001_initial.sql", "002_agent_conversations.sql", "003_phase_a_ops.sql"];
 
 async function migrate() {
   for (const file of migrationFiles) {

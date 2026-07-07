@@ -9,10 +9,12 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/db/migrate.ts",
-    "worker": "tsx src/worker.ts"
+    "worker": "tsx src/worker.ts",
+    "instantly:create-kinta-campaign": "tsx src/tools/upsertKintaCampaign.ts",
+    "agent:chat": "tsx src/tools/chatWithOutboundAgent.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "latest",
+    "@anthropic-ai/sdk": "0.105.0",
     "@slack/web-api": "^7.7.0",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",

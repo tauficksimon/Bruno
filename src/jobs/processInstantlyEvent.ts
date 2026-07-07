@@ -1,12 +1,13 @@
 import { classifyReply } from "../agents/replyIntentAgent.js";
 import { draftReply } from "../agents/draftingAgent.js";
+import { activateAlertOnce, clearAlertOnce, isAgentPaused } from "../db/config.js";
 import { markEventProcessed } from "../db/events.js";
 import { saveDraft, saveReplyClassification } from "../db/replyRecords.js";
 import { saveSuppression } from "../db/suppressions.js";
 import { upsertReplyContext } from "../integrations/hubspot.js";
 import { stopLeadSequence, suppressLead } from "../integrations/instantly.js";
 import { postHotReply, postError } from "../integrations/slack.js";
-import type { QueueJob } from "../queue/queue.js";
+import { enqueueJob, type QueueJob } from "../queue/queue.js";
 import type { InstantlyEvent } from "../types/domain.js";
 
 interface InstantlyEventJobPayload {
@@ -16,6 +17,18 @@ interface InstantlyEventJobPayload {
 
 export async function processInstantlyEventJob(job: QueueJob) {
   const { eventId, event } = job.payload as InstantlyEventJobPayload;
+
+  if (await isAgentPaused()) {
+    if (await activateAlertOnce("instantly-event-paused")) {
+      await postError("Agent kill switch is on. Deferring Instantly reply processing; no classifications or drafts will run while paused.");
+    }
+    await enqueueJob(job.name, job.payload, {
+      runAfter: new Date(Date.now() + 10 * 60 * 1000),
+      maxAttempts: job.maxAttempts
+    });
+    return;
+  }
+  await clearAlertOnce("instantly-event-paused");
 
   if (isBounce(event)) {
     await saveSuppression({
@@ -91,7 +104,7 @@ export async function processInstantlyEventJob(job: QueueJob) {
   }
 
   if (classification.intent === "positive" || classification.intent === "question" || classification.intent === "objection") {
-    await stopLeadSequence({ email: event.email, leadId: event.leadId });
+    await stopLeadSequence({ email: event.email, leadId: event.leadId, campaignId: event.campaignId });
     await postHotReply(formatHotReply(event.companyName, classification.intent, classification.reason, draft?.body));
   }
 
@@ -103,7 +116,7 @@ export async function processInstantlyEventJob(job: QueueJob) {
 }
 
 function isReply(event: InstantlyEvent) {
-  return /reply|replied|email_reply/i.test(event.eventType);
+  return /reply|replied|email_reply|email\.received|received/i.test(event.eventType);
 }
 
 function isBounce(event: InstantlyEvent) {
