@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import cron from "node-cron";
 import pino from "pino";
 import { env } from "./config/env.js";
+import { registerDashboard } from "./dashboard/routes.js";
 import { closePool } from "./db/pool.js";
 import { enqueueJob } from "./queue/queue.js";
 import { startWorkerLoop } from "./queue/worker.js";
@@ -35,6 +36,7 @@ app.get("/health", async () => ({
 
 await registerInstantlyWebhook(app);
 await registerSlackWebhook(app);
+await registerDashboard(app);
 
 cron.schedule("*/5 * * * *", async () => {
   await enqueueJob("reply.poll", { scheduledAt: new Date().toISOString() });
