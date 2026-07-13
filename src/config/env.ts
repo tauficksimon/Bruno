@@ -17,6 +17,8 @@ const envSchema = z.object({
 
   APOLLO_API_KEY: z.string().optional(),
 
+  DASHBOARD_SECRET: z.string().min(16).optional(),
+
   SLACK_BOT_TOKEN: z.string().optional(),
   SLACK_SIGNING_SECRET: z.string().optional(),
   SLACK_CHANNEL_HOT_REPLIES: z.string().default("agent-hot-replies"),

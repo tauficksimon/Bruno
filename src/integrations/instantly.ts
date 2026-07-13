@@ -373,6 +373,30 @@ export async function pauseInstantlyCampaign(id: string) {
   }) as Promise<InstantlyCampaign>;
 }
 
+/**
+ * Reply to a received email from one of our inboxes.
+ * NOT yet verified against the live v2 API (no real replies existed at build
+ * time) — verify the field names on the first live send before trusting it.
+ */
+export async function sendReplyEmail(input: {
+  replyToUuid: string;
+  eaccount: string;
+  subject: string;
+  bodyText: string;
+}) {
+  return instantlyFetch("/api/v2/emails/reply", {
+    method: "POST",
+    body: JSON.stringify({
+      reply_to_uuid: input.replyToUuid,
+      eaccount: input.eaccount,
+      subject: input.subject,
+      body: {
+        text: input.bodyText
+      }
+    })
+  });
+}
+
 export async function stopLeadSequence(input: { email?: string; leadId?: string; campaignId?: string }) {
   if (!env.INSTANTLY_API_KEY) return;
   if (!input.email) {

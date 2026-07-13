@@ -50,6 +50,11 @@ Everything below is justified by one of these five.
   alerting, reporting) is autonomous. As trust builds, loosen selectively.
 - **The agent is the interface.** The boss never opens Instantly or a dashboard. Slack chat +
   proactive alerts *are* the product surface. (Phase 1 of this is built.)
+  _Revised 2026-07-12: the client asked for a web dashboard link instead of connecting Slack.
+  The product surface for Phase B is now `/dashboard` (secret-link auth, served by the same
+  Fastify service): approval queue with Approve-&-Send/Reject, KPIs, reply feed, kill switch.
+  Slack integration stays in the code, dormant — alerts fall back to logs until/unless a
+  Slack token is ever added._
 - **Pull > push where the vendor makes push expensive.** Instantly webhooks are a paid
   add-on; polling every 3–5 min is free and well within the speed-to-lead budget.
 - **Fail loud.** Any terminal failure lands in `#agent-errors`. Silence must mean health.
@@ -195,8 +200,10 @@ scoring is for).
   1000× current volume.
 - **No vector DB / RAG.** The agent's context is live API data, not documents.
 - **No agent framework (LangChain etc.).** The 100-line tool loop is debuggable and owned.
-- **No custom dashboard/web UI.** Slack + the daily digest are the dashboard. Revisit only
-  if a third stakeholder who can't live in Slack appears.
+- ~~**No custom dashboard/web UI.** Slack + the daily digest are the dashboard. Revisit only
+  if a third stakeholder who can't live in Slack appears.~~ _Exactly that happened
+  (2026-07-12): the client asked for a link-accessible dashboard instead of Slack. Built as
+  one server-rendered page inside the existing service — still no separate frontend app._
 - **No fine-tuning.** Prompt + few-shot in the drafting agent covers tone; revisit at
   1,000+ replies of training signal.
 - **No autonomous sending.** Approval stays human until reply volume makes it a bottleneck
@@ -256,7 +263,7 @@ Prospect-facing sends become one tap; real leads flow in; the agent gets hands (
 
 | # | Work item | Source |
 |---|---|---|
-| B1 | `/slack/interactive` endpoint + Approve/Edit/Reject buttons on drafts | plan §4.3 |
+| B1 | ~~`/slack/interactive` endpoint~~ → ✅ **built as the web dashboard** (2026-07-12): `/dashboard` with Approve-&-Send (edit-in-place) / Reject on drafts, KPI tiles, reply feed, agent pause toggle; secret-link auth via `DASHBOARD_SECRET`. B3's send call (`emails/reply`) is implemented but **not yet verified against the live API** — verify on first real send. | plan §4.3 |
 | B2 | T2/T3 confirmation machinery — same flow drives chat confirmations ("pause it? [yes/no]") and buttons; action tools: `send_reply`, `pause_campaign`, `resume_campaign`, `add_leads` | AD§3, §2.3 (old agent-plan Phase 2) |
 | B3 | Approved send via Instantly `emails/reply` → `drafts.status='sent'` + `approvals` row + stop sequence + CRM note | plan §4.3 |
 | B4 | Migration: `approvals.final_body` (captures human edits — the learning signal for C) | AD§5.1 |
