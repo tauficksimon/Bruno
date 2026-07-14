@@ -133,8 +133,10 @@ function briefingRows(b: BriefingModel) {
       .map((r) => `${r.count} ${r.intent.replace("_", " ")}`);
     rows.push(`<span class="b-flag">new</span> ${totalNew} new repl${totalNew === 1 ? "y" : "ies"} in the last 24h: ${parts.join(", ")}.`);
   }
-  if (b.sendsYesterday !== undefined) {
-    rows.push(`<span class="b-flag">sent</span> ${b.sendsYesterday} email${b.sendsYesterday === 1 ? "" : "s"} went out yesterday. <a href="/dashboard/campaign">Campaign →</a>`);
+  if (b.sendsYesterday !== undefined && !(b.sendsYesterday === 0 && b.campaignStatus === "paused")) {
+    rows.push(
+      `<span class="b-flag">sent</span> ${b.sendsYesterday} campaign email${b.sendsYesterday === 1 ? "" : "s"} went out yesterday (warmup not counted). <a href="/dashboard/campaign">Campaign →</a>`
+    );
   }
   if (b.campaignStatus) {
     rows.push(

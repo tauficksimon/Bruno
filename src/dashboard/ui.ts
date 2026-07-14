@@ -734,10 +734,10 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
 </head>
 <body data-autorefresh="${ctx.autoRefresh ? "1" : "0"}"${ctx.active === "bruno" ? ' class="chat-page"' : ""}>
 <aside class="side">
-  <div class="brand">
+  <a class="brand" href="/dashboard" style="text-decoration:none">
     <div class="klogo"><span class="k">k</span><span class="dot">.</span></div>
     <div class="brand-name">kinta<span class="dot">.</span><small>outbound console</small></div>
-  </div>
+  </a>
   <form class="side-search" action="/dashboard/search" method="get">
     <input type="search" name="q" placeholder="Search leads…" required minlength="2" />
   </form>
