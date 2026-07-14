@@ -63,9 +63,9 @@ export function whoLabel(companyName?: string, email?: string) {
   return companyName?.trim() || email?.trim() || "Unknown lead";
 }
 
-export function renderChatTurns(turns: ChatTurn[], emptyHint: string) {
+export function renderChatTurns(turns: ChatTurn[], emptyHtml: string) {
   if (turns.length === 0) {
-    return `<div class="chat-empty muted">${emptyHint}</div>`;
+    return emptyHtml;
   }
   return turns
     .map((turn) =>
@@ -101,7 +101,7 @@ function renderDock(ctx: ShellContext) {
     </div>
     <div class="chat" data-chat>
       <div class="chat-scroll" data-chat-scroll>
-        ${renderChatTurns(ctx.dockTurns.slice(-8), "Ask Bruno anything — campaign numbers, inbox health, a draft…")}
+        ${renderChatTurns(ctx.dockTurns.slice(-8), `<div class="chat-empty muted">Ask Bruno anything — campaign numbers, inbox health, a draft…</div>`)}
       </div>
       <form class="composer" data-chat-form>
         <textarea name="message" rows="2" placeholder="Ask Bruno…" required></textarea>
@@ -235,11 +235,11 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .topbar {
     display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    padding: 16px 26px 0;
+    padding: 16px 26px 0; max-width: 1012px; width: 100%; margin: 0 auto;
   }
   .topbar h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; margin: 0; margin-right: auto; }
-  main { padding: 18px 26px 60px; max-width: 1080px; width: 100%; }
-  main.main-chat { flex: 1; display: flex; flex-direction: column; padding-bottom: 20px; }
+  main { padding: 18px 26px 60px; max-width: 1012px; width: 100%; margin: 0 auto; }
+  main.main-chat { flex: 1; display: flex; flex-direction: column; padding-bottom: 24px; max-width: 880px; }
 
   .reveal { animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.3, 1) both; animation-delay: calc(var(--d, 0) * 90ms); }
   @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
@@ -361,6 +361,14 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   .chat { display: flex; flex-direction: column; min-height: 0; flex: 1; }
   .chat-scroll { flex: 1; overflow-y: auto; padding: 4px 2px; display: flex; flex-direction: column; gap: 12px; }
   .chat-empty { text-align: center; padding: 26px 12px; font-size: 13px; }
+  .chat-welcome { margin: auto; text-align: center; padding: 20px; max-width: 460px; }
+  .bruno-mark {
+    width: 72px; height: 72px; line-height: 72px; margin: 0 auto 18px;
+    border-radius: 50%; background: var(--accent); color: #fff;
+    font-size: 30px; box-shadow: 0 10px 30px rgba(27,31,209,0.3);
+  }
+  .chat-welcome h2 { border: none; margin: 0 0 8px; padding: 0; font-size: 26px; font-weight: 800; display: block; }
+  .chat-welcome p { color: var(--muted); font-size: 14.5px; margin: 0; }
   .msg { max-width: 72%; padding: 11px 15px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14.5px; }
   .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
   .msg-agent {
@@ -368,18 +376,24 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
     border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(26,26,26,0.04);
   }
   .msg-tag { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .msg-tag::before { content: "✳ "; color: var(--accent); }
   .msg-tools { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 8px; }
   .msg-pending .dots span { animation: blink 1.2s infinite; }
   .msg-pending .dots span:nth-child(2) { animation-delay: 0.2s; }
   .msg-pending .dots span:nth-child(3) { animation-delay: 0.4s; }
   @keyframes blink { 0%,100% { opacity: 0.2 } 50% { opacity: 1 } }
-  .composer { display: flex; gap: 10px; align-items: flex-end; margin-top: 14px; }
-  .composer textarea {
-    flex: 1; border: 1px solid var(--hairline); border-radius: 12px; background: #fff;
-    padding: 11px 14px; font: inherit; font-size: 14.5px; resize: none; max-height: 140px;
+  .composer {
+    display: flex; gap: 10px; align-items: flex-end; margin-top: 14px;
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 16px;
+    padding: 8px 8px 8px 16px; box-shadow: 0 8px 28px rgba(13,14,107,0.07);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
-  .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  .btn-send { background: var(--accent); color: #fff; border-radius: 12px; padding: 12px 18px; }
+  .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), 0 8px 28px rgba(13,14,107,0.07); }
+  .composer textarea {
+    flex: 1; border: none; background: transparent; outline: none;
+    padding: 8px 0; font: inherit; font-size: 14.5px; resize: none; max-height: 140px;
+  }
+  .btn-send { background: var(--accent); color: #fff; border-radius: 11px; padding: 12px 18px; }
   .btn-send:hover:not(:disabled) { background: #171887; }
   .suggestions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 10px; }
   .suggestion {
@@ -482,7 +496,7 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   <div class="side-foot">
     ${agentChip}
     ${failedChip}
-    <button class="btn-ghost-light" id="pause-btn" data-paused="${ctx.agentPaused}">${ctx.agentPaused ? "Resume agent" : "Pause agent"}</button>
+    <button class="btn-ghost-light" id="pause-btn" data-paused="${ctx.agentPaused}">${ctx.agentPaused ? "Resume Bruno" : "Pause Bruno"}</button>
     <span class="mono side-updated">updated ${updatedLabel}</span>
   </div>
 </aside>
@@ -693,7 +707,7 @@ ${renderDock(ctx)}
     pauseButton.addEventListener("click", function () {
       var paused = pauseButton.getAttribute("data-paused") === "true";
       var verb = paused ? "Resume" : "Pause";
-      if (!confirm(verb + " the agent? " + (paused ? "It will start processing replies again." : "It will stop classifying and drafting until resumed."))) return;
+      if (!confirm(verb + " Bruno? " + (paused ? "He will start processing replies again." : "He will stop classifying and drafting until resumed."))) return;
       pauseButton.disabled = true;
       fetch("/dashboard/api/agent/pause", {
         method: "POST",

@@ -68,20 +68,24 @@ export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel) {
           <button class="suggestion">How many leads are loaded?</button>
         </div>`
       : "";
+  const welcome = `
+    <div class="chat-welcome">
+      <div class="bruno-mark">✳</div>
+      <h2>Ask Bruno</h2>
+      <p>He runs your outbound — watches the campaign, reads every reply, drafts the responses — and answers with live numbers, not guesses.</p>
+    </div>`;
+  const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
   return `
   <main class="main-chat reveal">
     <section class="briefing">
-      <div class="briefing-title mono">Today</div>
+      <div class="briefing-title mono">Today · ${dateLabel}</div>
       ${briefingRows(briefing)
         .map((row) => `<div class="briefing-row">${row}</div>`)
         .join("\n")}
     </section>
     <div class="chat" data-chat>
       <div class="chat-scroll" data-chat-scroll>
-        ${renderChatTurns(
-          turns,
-          "This is Bruno — he watches the outbound campaign, reads every reply, and answers with live numbers. Ask him anything."
-        )}
+        ${renderChatTurns(turns, welcome)}
       </div>
       ${suggestions}
       <form class="composer" data-chat-form>
