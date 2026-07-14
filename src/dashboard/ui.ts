@@ -132,6 +132,7 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex, nofollow" />
 <title>Kinta · ${escapeHtml(ctx.title)}</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231B1FD1'/%3E%3Ctext x='8' y='24' font-family='Verdana,sans-serif' font-weight='800' font-size='20' fill='white'%3Ek%3C/text%3E%3Ctext x='20' y='24' font-family='Verdana,sans-serif' font-weight='800' font-size='20' fill='%23F04E23'%3E.%3C/text%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800;900&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -190,12 +191,20 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
     display: flex; flex-direction: column;
     position: sticky; top: 0; height: 100vh;
   }
-  .brand {
-    font-weight: 800; font-size: 17px; letter-spacing: 0.01em;
-    padding: 20px 18px 16px; line-height: 1.3;
+  .brand { display: flex; align-items: center; gap: 11px; padding: 20px 18px 16px; }
+  /* Kinta's "k." mark, exactly as on kintalatam.com (32px blue square, white k, orange dot) */
+  .klogo {
+    width: 32px; height: 32px; flex: 0 0 auto;
+    background: var(--accent); border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--display); font-weight: 800; font-size: 18px; line-height: 1;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
   }
-  .brand em { color: var(--accent-mid); font-style: normal; }
-  .brand small { display: block; font-family: var(--mono); font-weight: 500; color: rgba(255,255,255,0.45); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; margin-top: 3px; }
+  .klogo .k { color: #fff; }
+  .klogo .dot { color: var(--cta); }
+  .brand-name { font-family: var(--display); font-weight: 800; font-size: 19px; letter-spacing: -0.02em; line-height: 1.1; color: #fff; }
+  .brand-name .dot { color: var(--cta); }
+  .brand-name small { display: block; font-family: var(--mono); font-weight: 500; color: rgba(255,255,255,0.45); font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase; margin-top: 3px; }
   .nav { display: flex; flex-direction: column; padding: 8px 10px; gap: 2px; }
   .nav-item {
     display: flex; align-items: center; justify-content: space-between;
@@ -515,7 +524,10 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
 </head>
 <body data-autorefresh="${ctx.autoRefresh ? "1" : "0"}"${ctx.active === "bruno" ? ' class="chat-page"' : ""}>
 <aside class="side">
-  <div class="brand">Bruno<small>Kinta <em>·</em> outbound</small></div>
+  <div class="brand">
+    <div class="klogo"><span class="k">k</span><span class="dot">.</span></div>
+    <div class="brand-name">kinta<span class="dot">.</span><small>outbound console</small></div>
+  </div>
   <nav class="nav">
     ${navHtml}
   </nav>
