@@ -2,102 +2,134 @@ import type { InstantlyCampaignPayload } from "../integrations/instantly.js";
 
 export const KINTA_CAMPAIGN_NAME = "Kinta Outbound Campaign - Nearshore Hiring";
 
+// v2 copy (Kinta_Campaign_v2.docx): Email 1 is an A/B pair — Instantly runs the
+// split natively when a step carries multiple enabled variants. Everyone gets
+// the same Emails 2-5. Kill the losing variant once the winner holds 3%+
+// replies over ~400 sends per arm.
+//
+// The doc writes variables Apollo-style ({{first_name}}); Instantly's built-in
+// lead fields are camelCase ({{firstName}}, {{companyName}}) and Apollo CSV
+// columns map onto them at upload, so camelCase is used here.
+// "[First name]" sign-offs use {{sendingAccountFirstName}} so each of the
+// sender inboxes signs with its own name.
 const sequenceSteps = [
   {
     day: 1,
     delayFromPreviousStepDays: 0,
-    subject: "Most companies are paying double what they need to on hiring",
-    body: `Hi {{firstName}},
+    variants: [
+      {
+        name: "A — hiring math",
+        subject: "{{companyName}}'s hiring math",
+        body: `Hi {{firstName}},
 
-Most US companies are paying double what they need to for great talent — simply because they're hiring locally when they don't have to.
+The salary is only part of what a hire costs — benefits, overhead, and turnover quietly push it far higher. Most companies end up paying double what the same role could cost.
 
-Kinta places full-time, bilingual professionals from Central America with US companies at half the cost. And that's just the starting point.
+At Kinta it's one flat fee, about half the base salary, everything included: a full-time bilingual professional, working your hours from our office in Central America — HR, equipment, and daily accountability all on us. If they leave, we replace them free.
 
-Our team works from our office. We handle everything — workspace, equipment, HR, culture, accountability, and follow-up. Your hire shows up every day, supported, managed, and committed. You don't manage any of that. We do.
+Want to see the math for {{companyName}}? 15 minutes.
 
-You get a dedicated professional integrated into your team. We give them a career.
+{{sendingAccountFirstName}}`
+      },
+      {
+        name: "B — the question",
+        subject: "which role would you fill first?",
+        body: `{{firstName}} — honest question.
 
-Worth a 15-minute call to see if there's a fit for {{companyName}}?
+If you could hire a great full-time person for one flat fee — about half of what the role costs you today, with the office, HR, equipment, and daily accountability all handled — which role would you fill first?
 
-The Kinta team
+That's Kinta. Our people work from our own office in Central America. We manage everything behind them. You get the output, and one predictable number.
 
-Kinta | kintalatam.com`
+Curious what came to mind.
+
+{{sendingAccountFirstName}}`
+      }
+    ]
   },
   {
     day: 4,
     delayFromPreviousStepDays: 3,
-    subject: "What this actually looks like in practice",
-    body: `Hi {{firstName}},
+    variants: [
+      {
+        name: "The proof",
+        subject: "what a Kinta hire looks like",
+        body: `Hi {{firstName}},
 
-Following up on my last note.
+She's at her desk in our office by 8am your time. Bilingual, university-educated, fully equipped. Our HR team is down the hall, and her manager reviews her work daily.
 
-Here's what a typical Kinta hire looks like: a full-time professional, working your hours, out of our managed office in Central America. Bilingual, equipped, and supported by our team on the ground — HR, culture, accountability, all handled.
+To you, she's just a team member on Slack — except she costs about half of the same hire in the US, and if she ever leaves, we replace her at no cost.
 
-Our clients don't manage a remote contractor. They add a team member. We handle everything behind that person so they can just focus on the work.
+That's the whole model. We built the environment. You get the talent.
 
-The savings — typically around 50% compared to a US hire — are almost secondary once they see how the model works.
+Worth seeing how it would work for {{companyName}}?
 
-Happy to show you a quick breakdown of how it would work for {{companyName}}.
-
-The Kinta team
-
-Kinta | kintalatam.com`
+{{sendingAccountFirstName}}`
+      }
+    ]
   },
   {
     day: 8,
     delayFromPreviousStepDays: 4,
-    subject: "Not a freelancer. Not a staffing agency.",
-    body: `Hi {{firstName}},
+    variants: [
+      {
+        name: "The differentiator",
+        subject: "not freelancers. not a job board.",
+        body: `Hi {{firstName}},
 
-I want to be clear about what Kinta is — because it's different from most remote hiring options out there.
+Every remote hiring option you've seen has the same flaw: after the placement, you're on your own.
 
-We're not a freelancer marketplace. We're not a staffing agency that hands you a resume and disappears. And we're not a job board.
+Freelancer disappears? Your problem. Remote hire underperforms? Your problem. That's why most founders who tried it once never try again.
 
-We run a physical delivery center in Central America. Our people come to work every day — real office, real equipment, real HR. When something goes wrong, we handle it. When someone leaves, we replace them.
+We built Kinta differently. Our people work from our physical office — real workspace, real HR, real daily management. When something breaks, we fix it. When someone leaves, we replace them. Guaranteed.
 
-Your hire gets a workplace, a team, and a career path. You get the output — at half the cost of hiring locally.
+One person or a small team, the model is the same: you get the output, we run everything behind it.
 
-That's the Kinta difference. Worth 15 minutes to walk you through it?
+Worth 15 minutes?
 
-The Kinta team
-
-Kinta | kintalatam.com`
+{{sendingAccountFirstName}}`
+      }
+    ]
   },
   {
     day: 15,
     delayFromPreviousStepDays: 7,
-    subject: `"We've tried remote before" — fair enough`,
-    body: `Hi {{firstName}},
+    variants: [
+      {
+        name: "The objection handler",
+        subject: "the reason it didn't work last time",
+        body: `Hi {{firstName}},
 
-A lot of founders I talk to have tried remote hiring before and it didn't stick. Usually when I dig into it, the issue wasn't the talent — it was everything around them.
+If you've tried remote hiring and it fell apart, I'd bet on why: it wasn't the person. It was that nobody was accountable for them.
 
-No real onboarding. No one accountable when things went sideways. No culture keeping them engaged.
+No onboarding. No manager. No one to call when things slipped. The talent was fine — the structure didn't exist.
 
-That's exactly what Kinta was built to solve. We don't just place someone and walk away. We build the environment around them — office, management, culture, follow-up — so they stay, perform, and grow with your team.
+That structure is literally what Kinta is. Office, HR, daily oversight, culture, replacement guarantee. We're not selling you a person and walking away. We're running the environment that makes the person work.
 
-If that's been the hesitation for {{companyName}}, it might be worth a quick conversation just to see what's different.
+If a bad past experience is what's kept {{companyName}} from looking at this again — that's exactly the conversation worth having.
 
-The Kinta team
-
-Kinta | kintalatam.com`
+{{sendingAccountFirstName}}`
+      }
+    ]
   },
   {
     day: 21,
     delayFromPreviousStepDays: 6,
-    subject: "Closing your file — unless the timing's just off?",
-    body: `Hi {{firstName}},
+    variants: [
+      {
+        name: "The breakup",
+        subject: "closing your file",
+        body: `Hi {{firstName}},
 
-I'll stop following up after this — don't want to be noise in your inbox.
+I'll stop here — don't want to be noise in your inbox.
 
-If the timing isn't right for {{companyName}}, no problem at all. If hiring costs become a priority down the road, just reply and I'll pick it back up.
+If the timing isn't right for {{companyName}}, no problem at all. If hiring costs become a priority later, just reply and I'll pick it back up.
 
-And if there's someone else on your team I should be talking to about this, I'd appreciate the pointer.
+And if someone else on your team owns this, I'd appreciate the pointer.
 
 Thanks either way.
 
-The Kinta team
-
-Kinta | kintalatam.com`
+{{sendingAccountFirstName}}`
+      }
+    ]
   }
 ];
 
@@ -146,13 +178,11 @@ export function buildKintaCampaignPayload(input: {
           // pre_delay only applies to subsequences and is ignored for regular campaigns.
           pre_delay: 0,
           pre_delay_unit: "days",
-          variants: [
-            {
-              subject: step.subject,
-              body: step.body,
-              v_disabled: false
-            }
-          ]
+          variants: step.variants.map((variant) => ({
+            subject: variant.subject,
+            body: variant.body,
+            v_disabled: false
+          }))
         }))
       }
     ],
@@ -162,7 +192,8 @@ export function buildKintaCampaignPayload(input: {
     first_email_text_only: true,
     email_list: input.senderEmails,
     // 400 leads/week target across 2 inboxes, sent only Tue-Thu (~3 sending days/week).
-    // Do not raise past this until Email 1 reply rate holds above 3% (then scale toward 10 inboxes / 2,000 per week).
+    // Do not raise past this until the winning Email 1 variant holds a reply rate above 3%
+    // (then scale toward 10 inboxes / 2,000 per week).
     daily_limit: 135,
     stop_on_reply: true,
     link_tracking: false,
@@ -186,7 +217,10 @@ export function buildKintaCampaignPayload(input: {
 export function getKintaCampaignSummary() {
   return sequenceSteps.map((step) => ({
     day: step.day,
-    subject: step.subject,
-    preview: step.body.split("\n\n")[1] ?? step.body
+    variants: step.variants.map((variant) => ({
+      name: variant.name,
+      subject: variant.subject,
+      preview: variant.body.split("\n\n")[1] ?? variant.body
+    }))
   }));
 }

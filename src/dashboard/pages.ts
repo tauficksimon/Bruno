@@ -1,41 +1,448 @@
-// Page bodies for the dashboard shell. Data models are assembled in routes.ts;
+// Page bodies for the console shell. Data models are assembled in routes.ts;
 // these functions only turn them into HTML (everything dynamic escaped).
 
-import { escapeHtml, intentBadge, relativeTime, renderChatTurns, whoLabel, type ChatTurn } from "./ui.js";
+import { leadStatusLabel } from "../integrations/instantly.js";
+import { escapeHtml, intentBadge, relativeTime, renderChatTurns, whoLabel, SEND_ICON, type ChatTurn } from "./ui.js";
 
 const INTENT_ORDER = ["positive", "question", "objection", "not_now", "negative", "unsubscribe", "unclear"];
 
-// ————— Agent (chat home) —————
+// ————— Live Instantly views (shared) —————
 
-export function renderAgentPage(turns: ChatTurn[]) {
-  const suggestions =
-    turns.length === 0
-      ? `<div class="suggestions">
-          <button class="suggestion">How is the campaign doing?</button>
-          <button class="suggestion">What's our inbox health?</button>
-          <button class="suggestion">Any replies this week?</button>
-          <button class="suggestion">How many leads are loaded?</button>
-        </div>`
-      : "";
+export interface EngagementView {
+  openCount: number;
+  clickCount: number;
+  replyCount: number;
+  status?: number;
+  lastContactAt?: string;
+  lastStepId?: string;
+  lastStepFrom?: string;
+}
+
+export interface PulseView {
+  campaignName: string;
+  statusLabel: string;
+  dailyLimit?: number;
+  openTracking?: boolean;
+  leadCount?: number;
+  leadCountCapped?: boolean;
+  sent: number;
+  opensUnique: number;
+  clicks: number;
+  repliesUnique: number;
+  bounces: number;
+  unsubscribes: number;
+  inboxes: Array<{ email: string; todaySent?: number; last7Sent: number; landingRate: number }>;
+}
+
+function ratePercent(numerator: number, denominator: number) {
+  if (denominator <= 0) return undefined;
+  return `${((numerator / denominator) * 100).toFixed(1)}%`;
+}
+
+/** "email 2 · variant B" from Instantly's stepID format "0_2_1". */
+function stepLabel(stepId?: string) {
+  if (!stepId) return undefined;
+  const parts = stepId.split("_");
+  if (parts.length < 2) return undefined;
+  const step = parts[1];
+  const variant = parts.length > 2 ? Number(parts[2]) : undefined;
+  const variantLabel = variant !== undefined && !Number.isNaN(variant) ? ` · variant ${String.fromCharCode(65 + variant)}` : "";
+  return `email ${step}${variantLabel}`;
+}
+
+export function renderPulseStrip(pulse: PulseView) {
+  const openRate = ratePercent(pulse.opensUnique, pulse.sent);
+  const replyRate = ratePercent(pulse.repliesUnique, pulse.sent);
+  const items: string[] = [
+    `<span class="pulse-item">campaign <strong>${escapeHtml(pulse.statusLabel)}</strong></span>`,
+    `<span class="pulse-item"><strong>${pulse.sent}</strong> sent</span>`,
+    pulse.openTracking === false
+      ? `<span class="pulse-item pulse-dim">opens n/a (tracking off)</span>`
+      : `<span class="pulse-item"><strong>${pulse.opensUnique}</strong> opens${openRate ? ` (${openRate})` : ""}</span>`,
+    `<span class="pulse-item"><strong>${pulse.clicks}</strong> clicks</span>`,
+    `<span class="pulse-item"><strong>${pulse.repliesUnique}</strong> replies${replyRate ? ` (${replyRate})` : ""}</span>`,
+    `<span class="pulse-item"><strong>${pulse.bounces}</strong> bounced</span>`
+  ];
+  if (pulse.leadCount !== undefined) {
+    items.push(`<span class="pulse-item"><strong>${pulse.leadCount}${pulse.leadCountCapped ? "+" : ""}</strong> leads</span>`);
+  }
+  if (pulse.dailyLimit !== undefined) {
+    items.push(`<span class="pulse-item">limit <strong>${pulse.dailyLimit}</strong>/day</span>`);
+  }
+  return `
+  <section class="pulse">
+    <span class="pulse-label">live · instantly</span>
+    ${items.join("\n")}
+  </section>`;
+}
+
+function engagementChips(engagement: EngagementView | undefined, now: Date) {
+  if (!engagement) return "";
+  const chips: string[] = [];
+  if (engagement.openCount > 0) chips.push(`opened ${engagement.openCount}×`);
+  if (engagement.clickCount > 0) chips.push(`clicked ${engagement.clickCount}×`);
+  const step = stepLabel(engagement.lastStepId);
+  if (step) chips.push(`last got ${step}`);
+  if (engagement.lastStepFrom) chips.push(`from ${engagement.lastStepFrom}`);
+  if (engagement.lastContactAt) chips.push(`last touch ${relativeTime(engagement.lastContactAt, now)}`);
+  const status = leadStatusLabel(engagement.status);
+  if (status) chips.push(status);
+  if (chips.length === 0) return "";
+  return `<div class="eng">${chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}</div>`;
+}
+
+// ————— Bruno (home: briefing + chat) —————
+
+export interface BriefingModel {
+  agentPaused: boolean;
+  pendingCount: number;
+  hottestWho?: string;
+  needsReadCount: number;
+  replies24h: Array<{ intent: string; count: number }>;
+  sendsYesterday?: number;
+  failedJobs: number;
+  lastPollAgo?: string;
+  campaignStatus?: string;
+  campaignSent?: number;
+  dailyLimit?: number;
+}
+
+function briefingRows(b: BriefingModel) {
+  const rows: string[] = [];
+
+  if (b.agentPaused) {
+    rows.push(`<span class="b-flag b-warn">paused</span> Bruno is paused — replies aren't being processed. Resume him from the sidebar.`);
+  }
+  if (b.pendingCount > 0) {
+    rows.push(
+      `<span class="b-flag b-hot">act</span> <strong>${b.pendingCount} repl${b.pendingCount === 1 ? "y" : "ies"} waiting on you</strong>${
+        b.hottestWho ? ` — hottest: ${escapeHtml(b.hottestWho)}` : ""
+      } <a href="/dashboard/inbox">open Inbox →</a>`
+    );
+  }
+  if (b.needsReadCount > 0) {
+    rows.push(
+      `<span class="b-flag">read</span> ${b.needsReadCount} repl${b.needsReadCount === 1 ? "y" : "ies"} Bruno couldn't classify — worth a human glance. <a href="/dashboard/inbox">Inbox →</a>`
+    );
+  }
+  const totalNew = b.replies24h.reduce((sum, r) => sum + r.count, 0);
+  if (totalNew > 0) {
+    const parts = b.replies24h
+      .slice()
+      .sort((a, z) => INTENT_ORDER.indexOf(a.intent) - INTENT_ORDER.indexOf(z.intent))
+      .map((r) => `${r.count} ${r.intent.replace("_", " ")}`);
+    rows.push(`<span class="b-flag">new</span> ${totalNew} new repl${totalNew === 1 ? "y" : "ies"} in the last 24h: ${parts.join(", ")}.`);
+  }
+  if (b.sendsYesterday !== undefined) {
+    rows.push(`<span class="b-flag">sent</span> ${b.sendsYesterday} email${b.sendsYesterday === 1 ? "" : "s"} went out yesterday. <a href="/dashboard/campaign">Campaign →</a>`);
+  }
+  if (b.campaignStatus) {
+    rows.push(
+      `<span class="b-flag">camp</span> Campaign is <strong>${escapeHtml(b.campaignStatus)}</strong>${
+        b.campaignSent !== undefined ? ` — ${b.campaignSent} sent lifetime` : ""
+      }${b.dailyLimit !== undefined ? `, limit ${b.dailyLimit}/day` : ""}. <a href="/dashboard/campaign">Campaign →</a>`
+    );
+  }
+  if (b.failedJobs > 0) {
+    rows.push(`<span class="b-flag b-warn">check</span> ${b.failedJobs} background task${b.failedJobs === 1 ? "" : "s"} failed. <a href="/dashboard/system">System →</a>`);
+  }
+  if (rows.length === 0 || (!b.agentPaused && b.failedJobs === 0)) {
+    rows.push(
+      `<span class="b-flag b-ok">ok</span> Everything running normally${b.lastPollAgo ? ` — replies last checked ${b.lastPollAgo}` : ""}.`
+    );
+  }
+  return rows;
+}
+
+export function renderBrunoPage(
+  turns: ChatTurn[],
+  briefing: BriefingModel,
+  chatId: string,
+  modelLabel: string,
+  mode: "chat" | "channel" = "chat"
+) {
+  const welcome =
+    mode === "channel"
+      ? `
+    <div class="chat-welcome">
+      <div class="bruno-mark">✳</div>
+      <h2># updates</h2>
+      <p>Bruno posts here on his own — the morning digest, alerts the minute they fire, weekly analytics.</p>
+      <p class="hint muted">Nothing yet. The first digest lands tomorrow morning — and you can reply under any update.</p>
+    </div>`
+      : `
+    <div class="chat-welcome">
+      <div class="bruno-mark">✳</div>
+      <h2>Bruno</h2>
+      <p>Campaign, replies, drafts — he's on it. Ask him anything.</p>
+      <p class="hint muted">Type below · <span class="mono">/</span> for commands</p>
+      <div class="suggestions">
+        <button class="suggestion">How is the campaign doing?</button>
+        <button class="suggestion">What's our inbox health?</button>
+        <button class="suggestion">Any replies this week?</button>
+        <button class="suggestion">How many leads are loaded?</button>
+      </div>
+    </div>`;
+  const pendingChip =
+    briefing.pendingCount > 0
+      ? `<a href="/dashboard/inbox">${briefing.pendingCount} waiting → Inbox</a>`
+      : `<span>kinta · outbound</span>`;
+  const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const needsYou = briefing.pendingCount + briefing.needsReadCount;
+  const todayLabel =
+    needsYou > 0 ? `${needsYou} need${needsYou === 1 ? "s" : ""} you` : briefing.failedJobs > 0 ? "check system" : "all clear";
   return `
   <main class="main-chat reveal">
-    <div class="chat" data-chat>
-      <div class="chat-scroll" data-chat-scroll>
-        ${renderChatTurns(
-          turns,
-          "This is your agent — it watches the outbound campaign, reads every reply, and answers with live numbers. Ask it anything."
-        )}
+    <div class="today-row">
+      <button class="today-btn" id="today-btn" type="button">
+        <span class="t-dot${needsYou > 0 || briefing.failedJobs > 0 ? " hot" : ""}"></span>
+        Today · ${escapeHtml(todayLabel)} ▾
+      </button>
+      <div class="today-panel" id="today-panel" hidden>
+        <div class="briefing-title mono">Today · ${dateLabel}</div>
+        ${briefingRows(briefing)
+          .map((row) => `<div class="briefing-row">${row}</div>`)
+          .join("\n")}
       </div>
-      ${suggestions}
-      <form class="composer" data-chat-form>
-        <textarea name="message" rows="2" placeholder="Ask the agent… (Enter to send, Shift+Enter for a new line)" required></textarea>
-        <button class="btn btn-send" type="submit">Send</button>
-      </form>
+    </div>
+    <div class="chat" data-chat data-chat-id="${escapeHtml(chatId)}">
+      <div class="chat-scroll" data-chat-scroll>
+        ${renderChatTurns(turns, welcome)}
+      </div>
+      <div class="composer-wrap">
+        <div class="palette" hidden></div>
+        <form class="composer" data-chat-form>
+          <textarea name="message" rows="2" placeholder="${mode === "channel" ? "Reply to Bruno's updates…" : "Message Bruno… ( / for commands )"}" required></textarea>
+          <button class="btn btn-send" type="submit" aria-label="Send">${SEND_ICON}</button>
+        </form>
+        <div class="composer-foot">
+          <span><span class="live-dot${briefing.agentPaused ? " paused" : ""}"></span>${briefing.agentPaused ? "paused" : "running"}${
+            briefing.lastPollAgo ? ` · replies checked ${briefing.lastPollAgo}` : ""
+          } · ${escapeHtml(modelLabel)}</span>
+          ${pendingChip}
+        </div>
+      </div>
     </div>
   </main>`;
 }
 
-// ————— Approvals —————
+// ————— Lead dossier —————
+
+export type TimelineItem =
+  | { kind: "sent"; at?: string; subject?: string; from?: string; text?: string }
+  | { kind: "received"; at?: string; subject?: string; text?: string }
+  | { kind: "read"; at: string; intent: string; confidence: number; reason: string; suggested?: string }
+  | { kind: "decision"; at: string; action: string; notes?: string; original?: string; finalText?: string }
+  | { kind: "suppression"; at: string; reason: string };
+
+export interface LeadDossierModel {
+  email: string;
+  name?: string;
+  company?: string;
+  interestLabel?: string;
+  sequenceLabel?: string;
+  engagement?: EngagementView;
+  customFields: Record<string, string>;
+  hasPendingDraft: boolean;
+  timeline: TimelineItem[];
+  threadUnavailable: boolean;
+}
+
+const INTEREST_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 1, label: "interested" },
+  { value: 2, label: "meeting booked" },
+  { value: 3, label: "meeting completed" },
+  { value: 4, label: "closed" },
+  { value: -1, label: "not interested" },
+  { value: -2, label: "wrong person" },
+  { value: -3, label: "lost" }
+];
+
+function renderTimelineItem(item: TimelineItem, now: Date) {
+  const when = item.at ? `<span class="mono muted">${relativeTime(item.at, now)}</span>` : "";
+  switch (item.kind) {
+    case "sent":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-us">we sent</span>
+        <div class="tl-body">
+          <div class="tl-head"><strong>${escapeHtml(item.subject ?? "(no subject)")}</strong>${item.from ? `<span class="mono muted">from ${escapeHtml(item.from)}</span>` : ""}${when}</div>
+          ${item.text ? `<details><summary class="mono muted">show email</summary><blockquote>${escapeHtml(item.text)}</blockquote></details>` : ""}
+        </div>
+      </div>`;
+    case "received":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-them">they replied</span>
+        <div class="tl-body">
+          <div class="tl-head"><strong>${escapeHtml(item.subject ?? "(no subject)")}</strong>${when}</div>
+          ${item.text ? `<blockquote>${escapeHtml(item.text)}</blockquote>` : ""}
+        </div>
+      </div>`;
+    case "read":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-bruno">bruno read</span>
+        <div class="tl-body">
+          <div class="tl-head">${intentBadge(item.intent)}<span class="mono muted">${Math.round(item.confidence * 100)}%</span>${when}</div>
+          <div class="tl-note">${escapeHtml(item.reason)}${item.suggested ? ` — <em>suggested: ${escapeHtml(item.suggested)}</em>` : ""}</div>
+        </div>
+      </div>`;
+    case "decision":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-human">you ${escapeHtml(item.action)}</span>
+        <div class="tl-body">
+          <div class="tl-head">${item.notes ? `<span class="muted">${escapeHtml(item.notes)}</span>` : ""}${when}</div>
+          ${
+            item.action === "edited" && item.original && item.finalText
+              ? `<details><summary class="mono muted">original vs sent</summary>
+                 <div class="section-label" style="margin-top:8px">Bruno's original</div><blockquote>${escapeHtml(item.original)}</blockquote>
+                 <div class="section-label" style="margin-top:8px">What you sent</div><blockquote>${escapeHtml(item.finalText)}</blockquote></details>`
+              : item.finalText
+                ? `<details><summary class="mono muted">show sent reply</summary><blockquote>${escapeHtml(item.finalText)}</blockquote></details>`
+                : ""
+          }
+        </div>
+      </div>`;
+    case "suppression":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-warn">suppressed</span>
+        <div class="tl-body"><div class="tl-head"><span>${escapeHtml(item.reason)} — added to do-not-contact</span>${when}</div></div>
+      </div>`;
+  }
+}
+
+export function renderLeadPage(m: LeadDossierModel, now: Date) {
+  const who = m.name || m.company || m.email;
+  const fields = Object.entries(m.customFields).slice(0, 8);
+  return `
+  <main class="reveal">
+    <section class="card dossier-head">
+      <header class="card-head">
+        <div>
+          <h3>${escapeHtml(who)}</h3>
+          <div class="mono muted">${escapeHtml(m.email)}${m.company && m.name ? ` · ${escapeHtml(m.company)}` : ""}</div>
+        </div>
+        <div class="card-meta">
+          ${m.interestLabel ? `<span class="badge" style="background:rgba(52,211,116,0.13);color:#4ade80">${escapeHtml(m.interestLabel)}</span>` : ""}
+          ${m.sequenceLabel ? `<span class="badge" style="background:rgba(148,163,184,0.14);color:#cbd5e1">${escapeHtml(m.sequenceLabel)}</span>` : ""}
+        </div>
+      </header>
+      ${engagementChips(m.engagement, now)}
+      ${
+        fields.length > 0
+          ? `<div class="eng" style="margin-top:8px">${fields.map(([k, v]) => `<span>${escapeHtml(k)}: ${escapeHtml(v.slice(0, 40))}</span>`).join("")}</div>`
+          : ""
+      }
+      <footer class="card-actions">
+        ${m.hasPendingDraft ? `<a class="btn btn-approve" style="text-decoration:none" href="/dashboard/inbox">Draft waiting → Inbox</a>` : ""}
+        <form class="interest-form" data-interest-form data-email="${escapeHtml(m.email)}">
+          <select name="status" class="interest-select">
+            <option value="">Set pipeline status…</option>
+            ${INTEREST_OPTIONS.map((o) => `<option value="${o.value}"${m.interestLabel === o.label ? " selected" : ""}>${o.label}</option>`).join("")}
+          </select>
+          <button class="btn btn-plain" type="submit">Update</button>
+          <span class="action-status mono" aria-live="polite"></span>
+        </form>
+      </footer>
+    </section>
+    <h2>Timeline</h2>
+    ${m.threadUnavailable ? `<p class="muted">Email thread unavailable from Instantly right now — showing Bruno's records only.</p>` : ""}
+    ${m.timeline.length === 0 ? `<p class="muted">Nothing recorded for this lead yet.</p>` : `<div class="tl">${m.timeline.map((t) => renderTimelineItem(t, now)).join("\n")}</div>`}
+  </main>`;
+}
+
+// ————— Leads (CRM) —————
+
+export interface CrmRow {
+  email: string;
+  name?: string;
+  company?: string;
+  interestLabel?: string;
+  sequenceLabel?: string;
+  opens: number;
+  clicks: number;
+  replies: number;
+  lastContactAt?: string;
+  tags: string;
+}
+
+export function renderLeadsPage(rows: CrmRow[], now: Date, capped: boolean) {
+  const tabs = ["all", "replied", "interested", "in sequence", "finished", "suppressed"];
+  const table =
+    rows.length === 0
+      ? `<div class="empty"><p>No leads in the campaign yet — they'll appear here as soon as the Apollo import lands in Instantly.</p></div>`
+      : `
+      <div class="table-scroll">
+        <table id="crm-table">
+          <thead><tr><th>Lead</th><th>Pipeline</th><th>Sequence</th><th class="num">Opens</th><th class="num">Clicks</th><th class="num">Replies</th><th>Last contact</th></tr></thead>
+          <tbody>
+            ${rows
+              .map(
+                (row) => `
+                <tr data-tags="${escapeHtml(row.tags)}" data-text="${escapeHtml(`${row.name ?? ""} ${row.company ?? ""} ${row.email}`.toLowerCase())}">
+                  <td><a class="lead-link" href="/dashboard/lead?email=${encodeURIComponent(row.email)}"><strong>${escapeHtml(row.name || row.company || row.email)}</strong></a><div class="mono muted">${escapeHtml(row.email)}${row.company && row.name ? ` · ${escapeHtml(row.company)}` : ""}</div></td>
+                  <td>${row.interestLabel ? `<span class="badge" style="background:rgba(52,211,116,0.13);color:#4ade80">${escapeHtml(row.interestLabel)}</span>` : `<span class="muted">—</span>`}</td>
+                  <td class="mono">${escapeHtml(row.sequenceLabel ?? "—")}</td>
+                  <td class="mono num">${row.opens}</td>
+                  <td class="mono num">${row.clicks}</td>
+                  <td class="mono num">${row.replies}</td>
+                  <td class="mono">${row.lastContactAt ? relativeTime(row.lastContactAt, now) : "—"}</td>
+                </tr>`
+              )
+              .join("\n")}
+          </tbody>
+        </table>
+      </div>`;
+
+  return `
+  <main class="reveal">
+    <div class="crm-bar">
+      ${tabs.map((tab, i) => `<button class="crm-tab${i === 0 ? " sel" : ""}" data-crm-filter="${tab}">${tab}</button>`).join("")}
+      <input class="crm-search" id="crm-search" type="text" placeholder="filter by name, company, email…" />
+      <span class="mono muted">${rows.length}${capped ? "+" : ""} leads</span>
+    </div>
+    ${table}
+  </main>`;
+}
+
+// ————— Search results —————
+
+export interface SearchResultRow {
+  email: string;
+  name?: string;
+  company?: string;
+  detail: string;
+  pendingDraft?: boolean;
+}
+
+export function renderSearchPage(q: string, results: SearchResultRow[]) {
+  const rows =
+    results.length === 0
+      ? `<p class="muted">Nothing found for “${escapeHtml(q)}” — try a partial company name or email.</p>`
+      : results
+          .map(
+            (r) => `
+            <div class="feed-row">
+              <div class="feed-top">
+                <a class="lead-link" href="/dashboard/lead?email=${encodeURIComponent(r.email)}"><strong>${escapeHtml(r.name || r.company || r.email)}</strong></a>
+                ${r.pendingDraft ? `<span class="badge" style="background:rgba(240,78,35,0.14);color:#ff8a65">draft waiting</span>` : ""}
+                <span class="mono muted">${escapeHtml(r.email)}</span>
+              </div>
+              <div class="feed-reason muted">${escapeHtml(r.detail)}</div>
+            </div>`
+          )
+          .join("\n");
+  return `
+  <main class="reveal">
+    <h2>Results for “${escapeHtml(q)}”</h2>
+    ${rows}
+  </main>`;
+}
+
+// ————— Inbox —————
 
 export interface DraftCardModel {
   id: string;
@@ -44,6 +451,7 @@ export interface DraftCardModel {
   intent: string;
   confidence: number;
   reason: string;
+  suggestedNextAction?: string;
   internalReason?: string;
   prospectText?: string;
   subject: string;
@@ -51,6 +459,17 @@ export interface DraftCardModel {
   createdAt: string;
   sendFrom?: string;
   canSend: boolean;
+  engagement?: EngagementView;
+}
+
+export interface ReplyFeedModel {
+  companyName?: string;
+  email?: string;
+  intent: string;
+  reason: string;
+  createdAt: string;
+  prospectText?: string;
+  engagement?: EngagementView;
 }
 
 export interface ActivityModel {
@@ -60,9 +479,13 @@ export interface ActivityModel {
   createdAt: string;
 }
 
+const HOT_SLA_INTENTS = ["positive", "question", "objection"];
+
 function renderDraftCard(draft: DraftCardModel, now: Date) {
   const who = whoLabel(draft.companyName, draft.email);
   const confidence = `${Math.round(draft.confidence * 100)}%`;
+  const ageMinutes = Math.max(0, Math.floor((now.getTime() - new Date(draft.createdAt).getTime()) / 60000));
+  const slaOver = HOT_SLA_INTENTS.includes(draft.intent) && ageMinutes > 60;
   const sendNote = draft.canSend
     ? `will send from <strong>${escapeHtml(draft.sendFrom ?? "")}</strong>`
     : `<span class="warn-text">can't auto-send — the reply is missing its Instantly message reference; copy the draft and send it from Instantly</span>`;
@@ -71,29 +494,31 @@ function renderDraftCard(draft: DraftCardModel, now: Date) {
   <article class="card" data-draft-id="${escapeHtml(draft.id)}" data-who="${escapeHtml(who)}">
     <header class="card-head">
       <div>
-        <h3>${escapeHtml(who)}</h3>
+        <h3>${draft.email ? `<a class="lead-link" href="/dashboard/lead?email=${encodeURIComponent(draft.email)}">${escapeHtml(who)}</a>` : escapeHtml(who)}</h3>
         ${draft.email ? `<div class="mono muted">${escapeHtml(draft.email)}</div>` : ""}
       </div>
       <div class="card-meta">
         ${intentBadge(draft.intent)}
         <span class="mono muted">${confidence}</span>
-        <span class="mono muted">${relativeTime(draft.createdAt, now)}</span>
+        <span class="mono ${slaOver ? "sla-over" : "muted"}">${relativeTime(draft.createdAt, now)}${slaOver ? " · ⏰ over the 1-hour mark" : ""}</span>
       </div>
     </header>
+    ${engagementChips(draft.engagement, now)}
     ${
       draft.prospectText
-        ? `<div class="prospect"><div class="section-label">Prospect wrote</div><blockquote>${escapeHtml(draft.prospectText)}</blockquote></div>`
+        ? `<div class="prospect"><div class="section-label">They wrote</div><blockquote>${escapeHtml(draft.prospectText)}</blockquote></div>`
         : ""
     }
-    <div class="agent-note"><span class="section-label">Agent read</span> ${escapeHtml(draft.reason)}${
+    <div class="agent-note"><span class="section-label">Bruno's read</span> ${escapeHtml(draft.reason)}${
       draft.internalReason ? ` · <em>${escapeHtml(draft.internalReason)}</em>` : ""
     }</div>
+    ${draft.suggestedNextAction ? `<div class="agent-note"><span class="section-label">Bruno suggests</span> ${escapeHtml(draft.suggestedNextAction)}</div>` : ""}
     <label class="field">
       <span class="section-label">Subject</span>
       <input type="text" name="subject" value="${escapeHtml(draft.subject)}" />
     </label>
     <label class="field">
-      <span class="section-label">Draft reply — edit freely, then approve</span>
+      <span class="section-label">Bruno's draft — edit freely, then approve</span>
       <textarea name="body" rows="9">${escapeHtml(draft.body)}</textarea>
     </label>
     <footer class="card-actions">
@@ -105,13 +530,73 @@ function renderDraftCard(draft: DraftCardModel, now: Date) {
   </article>`;
 }
 
-export function renderApprovalsPage(drafts: DraftCardModel[], activity: ActivityModel[], now: Date) {
+function handledDescription(intent: string) {
+  switch (intent) {
+    case "negative":
+      return "not interested — Bruno stopped their emails and added them to the do-not-contact list";
+    case "unsubscribe":
+      return "asked to unsubscribe — honored and added to the do-not-contact list";
+    case "not_now":
+      return "not right now — logged to revisit in a couple of months";
+    default:
+      return "logged";
+  }
+}
+
+export function renderInboxPage(
+  drafts: DraftCardModel[],
+  needsRead: ReplyFeedModel[],
+  handled: ReplyFeedModel[],
+  activity: ActivityModel[],
+  now: Date,
+  pulse?: PulseView
+) {
   const cards = drafts.map((draft) => renderDraftCard(draft, now)).join("\n");
   const empty = `
     <div class="empty">
       <div class="empty-mark">✓</div>
-      <p>Nothing waiting. New replies land here within ~5 minutes of arriving.</p>
+      <p>No one is waiting on you. New replies show up here within ~5 minutes of arriving.</p>
     </div>`;
+
+  const needsReadHtml =
+    needsRead.length === 0
+      ? ""
+      : `
+      <h2>Needs your read <span class="count mono">${needsRead.length}</span></h2>
+      <p class="muted" style="margin-top:-4px">Bruno wasn't confident what these mean — give them a quick human glance; if one is warm, reply from Instantly directly.</p>
+      ${needsRead
+        .map(
+          (row) => `
+          <article class="card">
+            <header class="card-head">
+              <div><h3>${escapeHtml(whoLabel(row.companyName, row.email))}</h3>
+              ${row.email ? `<div class="mono muted">${escapeHtml(row.email)}</div>` : ""}</div>
+              <div class="card-meta">${intentBadge(row.intent)}<span class="mono muted">${relativeTime(row.createdAt, now)}</span></div>
+            </header>
+            ${engagementChips(row.engagement, now)}
+            ${row.prospectText ? `<div class="prospect"><div class="section-label">They wrote</div><blockquote>${escapeHtml(row.prospectText)}</blockquote></div>` : ""}
+            <div class="agent-note"><span class="section-label">Bruno's read</span> ${escapeHtml(row.reason)}</div>
+          </article>`
+        )
+        .join("\n")}`;
+
+  const handledHtml =
+    handled.length === 0
+      ? `<p class="muted">Nothing yet — negative and unsubscribe replies will be handled automatically and listed here.</p>`
+      : handled
+          .map(
+            (row) => `
+            <div class="feed-row">
+              <div class="feed-top">
+                <strong>${escapeHtml(whoLabel(row.companyName, row.email))}</strong>
+                ${intentBadge(row.intent)}
+                <span class="mono muted">${relativeTime(row.createdAt, now)}</span>
+              </div>
+              <div class="feed-reason muted">${escapeHtml(handledDescription(row.intent))}</div>
+            </div>`
+          )
+          .join("\n");
+
   const log =
     activity.length === 0
       ? `<p class="muted">No approvals or rejections yet.</p>`
@@ -125,76 +610,29 @@ export function renderApprovalsPage(drafts: DraftCardModel[], activity: Activity
             </div>`
           )
           .join("\n");
+
   return `
   <main class="reveal">
+    ${pulse ? renderPulseStrip(pulse) : ""}
     <h2>Waiting on you <span class="count mono" id="pending-count">${drafts.length}</span></h2>
     ${drafts.length > 0 ? cards : empty}
+    ${needsReadHtml}
+    <h2>Handled for you · 7d</h2>
+    ${handledHtml}
     <h2>Recent actions</h2>
     ${log}
   </main>`;
 }
 
-// ————— Replies —————
+// ————— Campaign —————
 
-export interface ReplyFeedModel {
-  companyName?: string;
-  email?: string;
-  intent: string;
-  reason: string;
-  createdAt: string;
-}
-
-export function renderRepliesPage(feed: ReplyFeedModel[], intentCounts: Record<string, number>, now: Date) {
-  const entries = INTENT_ORDER.map((intent) => ({ intent, count: intentCounts[intent] ?? 0 })).filter((e) => e.count > 0);
-  const max = entries.length > 0 ? Math.max(...entries.map((e) => e.count)) : 0;
-  const mix =
-    entries.length === 0
-      ? `<p class="muted">No classified replies in the last 7 days.</p>`
-      : entries
-          .map(
-            (entry) => `
-            <div class="mix-row">
-              <span class="mix-label">${intentBadge(entry.intent)}</span>
-              <span class="mix-track"><span class="mix-bar" style="width:${Math.max(4, Math.round((entry.count / max) * 100))}%"></span></span>
-              <span class="mix-count mono">${entry.count}</span>
-            </div>`
-          )
-          .join("\n");
-
-  const rows =
-    feed.length === 0
-      ? `<p class="muted">No replies classified yet.</p>`
-      : feed
-          .map(
-            (row) => `
-            <div class="feed-row">
-              <div class="feed-top">
-                <strong>${escapeHtml(whoLabel(row.companyName, row.email))}</strong>
-                ${intentBadge(row.intent)}
-                <span class="mono muted">${relativeTime(row.createdAt, now)}</span>
-              </div>
-              <div class="feed-reason muted">${escapeHtml(row.reason)}</div>
-            </div>`
-          )
-          .join("\n");
-
-  return `
-  <main class="reveal">
-    <h2>Reply mix · 7d</h2>
-    ${mix}
-    <h2>All classified replies</h2>
-    ${rows}
-  </main>`;
-}
-
-// ————— Metrics —————
-
-export interface MetricsModel {
+export interface CampaignModel {
   sends7d: number;
   replies7d: number;
   bounces7d: number;
   positive7d: number;
   daily: Array<{ date: string; sends: number; replies: number; bounces: number }>;
+  pulse?: PulseView;
 }
 
 function formatPercent(numerator: number, denominator: number) {
@@ -202,10 +640,72 @@ function formatPercent(numerator: number, denominator: number) {
   return `${((numerator / denominator) * 100).toFixed(1)}%`;
 }
 
-export function renderMetricsPage(m: MetricsModel) {
+function renderLiveTiles(pulse: PulseView) {
+  const replyRate = ratePercent(pulse.repliesUnique, pulse.sent) ?? "—";
+  const openValue = pulse.openTracking === false ? "off" : String(pulse.opensUnique);
+  const openSub =
+    pulse.openTracking === false
+      ? "open tracking disabled (plain-text)"
+      : ratePercent(pulse.opensUnique, pulse.sent)
+        ? `${ratePercent(pulse.opensUnique, pulse.sent)} open rate`
+        : "no opens recorded yet";
+  const replySub =
+    pulse.sent < 300
+      ? "too few sends to judge vs the 3% rule"
+      : `${replyRate} vs the 3% golden rule`;
+  return `
+    <section class="kpis">
+      <div class="tile">
+        <div class="tile-label">Sent · lifetime</div>
+        <div class="tile-value">${pulse.sent.toLocaleString("en-US")}</div>
+        <div class="tile-sub">${pulse.leadCount !== undefined ? `${pulse.leadCount}${pulse.leadCountCapped ? "+" : ""} leads loaded` : "live from Instantly"}</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">Opens</div>
+        <div class="tile-value">${openValue}</div>
+        <div class="tile-sub">${openSub}</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">Replies</div>
+        <div class="tile-value">${pulse.repliesUnique}</div>
+        <div class="tile-sub">${replySub}</div>
+      </div>
+      <div class="tile${pulse.bounces > 0 && pulse.sent > 0 && pulse.bounces / pulse.sent > 0.03 ? " tile-bad" : ""}">
+        <div class="tile-label">Bounces</div>
+        <div class="tile-value">${pulse.bounces}</div>
+        <div class="tile-sub">${pulse.clicks} link clicks · ${pulse.unsubscribes} unsubscribed</div>
+      </div>
+    </section>`;
+}
+
+function renderInboxHealthTable(pulse: PulseView) {
+  if (pulse.inboxes.length === 0) return "";
+  const rows = pulse.inboxes
+    .map(
+      (inbox) => `
+      <tr>
+        <td class="mono">${escapeHtml(inbox.email)}</td>
+        <td class="mono num">${inbox.todaySent ?? "—"}</td>
+        <td class="mono num">${inbox.last7Sent}</td>
+        <td class="mono num">${Math.round(inbox.landingRate * 100)}%</td>
+        <td>${inbox.landingRate >= 0.9 ? `<span class="ok-text">healthy</span>` : `<span class="warn-text">watch — landing below 90%</span>`}</td>
+      </tr>`
+    )
+    .join("\n");
+  return `
+    <h2>Sending inboxes</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Inbox</th><th class="num">Warmup today</th><th class="num">7d warmup</th><th class="num">Inbox landing</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+export function renderCampaignPage(m: CampaignModel) {
   const table =
     m.daily.length === 0
-      ? `<p class="muted">No metrics yet — the nightly rollup fills this in once sending starts.</p>`
+      ? `<p class="muted">No daily history yet — this fills in nightly once sending starts.</p>`
       : `
       <div class="table-scroll">
         <table>
@@ -226,8 +726,7 @@ export function renderMetricsPage(m: MetricsModel) {
         </table>
       </div>`;
 
-  return `
-  <main class="reveal">
+  const fallbackTiles = `
     <section class="kpis">
       <div class="tile">
         <div class="tile-label">Sends · 7d</div>
@@ -242,40 +741,97 @@ export function renderMetricsPage(m: MetricsModel) {
       <div class="tile">
         <div class="tile-label">Reply rate · 7d</div>
         <div class="tile-value">${formatPercent(m.replies7d, m.sends7d)}</div>
-        <div class="tile-sub">golden rule: scale at &gt;3%</div>
+        <div class="tile-sub">${m.sends7d < 300 ? "too few sends to judge yet (need 300+)" : "golden rule: scale at >3%"}</div>
       </div>
       <div class="tile">
         <div class="tile-label">Bounce rate · 7d</div>
         <div class="tile-value">${formatPercent(m.bounces7d, m.sends7d)}</div>
         <div class="tile-sub">keep under 3%</div>
       </div>
-    </section>
+    </section>`;
+
+  return `
+  <main class="reveal">
+    ${m.pulse ? renderPulseStrip(m.pulse) : ""}
+    ${m.pulse ? renderLiveTiles(m.pulse) : fallbackTiles}
+    ${m.pulse ? renderInboxHealthTable(m.pulse) : ""}
     <h2>Last 7 days</h2>
     ${table}
   </main>`;
 }
 
-// ————— Operations —————
+// ————— System —————
 
-export interface OpsModel {
+export interface SystemModel {
+  agentPaused: boolean;
   queued: number;
   running: number;
   failed: number;
   oldestQueuedMinutes?: number;
+  lastPollAgo?: string;
+  lastPollStale: boolean;
   groups: Array<{ name: string; count: number; last_failed_at: string; latest_error: string | null }>;
+  instantlyOk: boolean;
+  claudeOk: boolean;
 }
 
-export function renderOpsPage(ops: OpsModel, now: Date) {
-  const failedTileClass = ops.failed > 0 ? " tile-bad" : "";
+/** Translate the most common raw errors into owner language. */
+function plainError(error: string | null) {
+  if (!error) return undefined;
+  if (/INSTANTLY_API_KEY is not configured|401|Unauthorized|Invalid API key/i.test(error)) {
+    return "the Instantly connection is being rejected — the API key is missing or wrong. Emails may still send, but Bruno can't see replies until it's fixed.";
+  }
+  if (/ANTHROPIC/i.test(error)) {
+    return "the Claude AI key is missing or invalid — Bruno can't classify replies or draft responses until it's fixed.";
+  }
+  if (/ECONNREFUSED|ETIMEDOUT|fetch failed|ENOTFOUND/i.test(error)) {
+    return "a network problem reaching an outside service — usually temporary.";
+  }
+  return undefined;
+}
+
+export function renderSystemPage(s: SystemModel, now: Date) {
+  const problems: string[] = [];
+  if (s.agentPaused) problems.push("Bruno is <strong>paused</strong> — nothing is being processed until you resume him (sidebar button).");
+  if (!s.instantlyOk) {
+    problems.push("Bruno can't reach Instantly right now — live campaign numbers and engagement are unavailable.");
+  }
+  if (!s.claudeOk) {
+    problems.push("The Claude AI key is missing — Bruno can't classify replies, draft responses, or chat until it's added.");
+  }
+  if (s.lastPollStale) {
+    problems.push(`Bruno hasn't been able to check for replies recently${s.lastPollAgo ? ` (last success ${s.lastPollAgo})` : ""}.`);
+  }
+  if (s.failed > 0) {
+    const latest = s.groups[0];
+    const translated = latest ? plainError(latest.latest_error) : undefined;
+    problems.push(
+      `${s.failed} background task${s.failed === 1 ? "" : "s"} gave up after retrying.${translated ? ` In plain terms: ${translated}` : ""}`
+    );
+  }
+
+  const hero =
+    problems.length === 0
+      ? `<div class="status-hero status-ok">
+           <div class="status-mark">✓</div>
+           <div><strong>Everything is running normally.</strong><br/>
+           <span class="muted">Bruno checks for replies every 5 minutes${s.lastPollAgo ? ` — last check ${s.lastPollAgo}` : ""}. Silence here means healthy.</span><br/>
+           <span class="mono muted">connections: instantly ✓ · claude ✓</span></div>
+         </div>`
+      : `<div class="status-hero status-bad">
+           <div class="status-mark">!</div>
+           <div>${problems.map((p) => `<p style="margin:0 0 6px">${p}</p>`).join("")}</div>
+         </div>`;
+
   const groups =
-    ops.groups.length === 0
-      ? `<div class="empty"><div class="empty-mark">✓</div><p>No failed jobs. Silence means healthy.</p></div>`
+    s.groups.length === 0
+      ? `<p class="muted">No failed tasks.</p>`
       : `
       <div class="table-scroll">
         <table>
-          <thead><tr><th>Job</th><th class="num">Failures</th><th>Last failed</th><th>Most recent error</th><th></th></tr></thead>
+          <thead><tr><th>Task</th><th class="num">Failures</th><th>Last failed</th><th>Most recent error</th><th></th></tr></thead>
           <tbody>
-            ${ops.groups
+            ${s.groups
               .map(
                 (group) => `
                 <tr>
@@ -300,32 +856,28 @@ export function renderOpsPage(ops: OpsModel, now: Date) {
 
   return `
   <main class="reveal">
-    <section class="kpis">
-      <div class="tile">
-        <div class="tile-label">Queued</div>
-        <div class="tile-value">${ops.queued}</div>
-        <div class="tile-sub">${ops.oldestQueuedMinutes !== undefined ? `oldest waiting ${ops.oldestQueuedMinutes}m` : "nothing overdue"}</div>
-      </div>
-      <div class="tile">
-        <div class="tile-label">Running</div>
-        <div class="tile-value">${ops.running}</div>
-        <div class="tile-sub">in flight right now</div>
-      </div>
-      <div class="tile${failedTileClass}">
-        <div class="tile-label">Failed</div>
-        <div class="tile-value">${ops.failed}</div>
-        <div class="tile-sub">${ops.failed > 0 ? "gave up after 5 attempts each" : "all clear"}</div>
-      </div>
-    </section>
-    <h2>What "failed" means</h2>
-    <p class="muted" style="max-width:640px">
-      Background work (checking for replies, rolling up metrics, health checks) runs as jobs.
-      A job retries itself up to 5 times; only then is it marked failed and shown here with its
-      error. A repeating count on the same job usually means one root cause — read the most
-      recent error, fix the cause, then use <strong>Retry latest</strong> to confirm the fix and
-      <strong>Clear</strong> to remove the old records.
-    </p>
-    <h2>Failed jobs by type <span class="count mono">${ops.failed}</span></h2>
-    ${groups}
+    ${hero}
+    <details class="tech">
+      <summary class="mono">Technical details</summary>
+      <section class="kpis kpis-3" style="margin-top:16px">
+        <div class="tile">
+          <div class="tile-label">Queued</div>
+          <div class="tile-value">${s.queued}</div>
+          <div class="tile-sub">${s.oldestQueuedMinutes !== undefined ? `oldest waiting ${s.oldestQueuedMinutes}m` : "nothing overdue"}</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Running</div>
+          <div class="tile-value">${s.running}</div>
+          <div class="tile-sub">in flight right now</div>
+        </div>
+        <div class="tile${s.failed > 0 ? " tile-bad" : ""}">
+          <div class="tile-label">Failed</div>
+          <div class="tile-value">${s.failed}</div>
+          <div class="tile-sub">${s.failed > 0 ? "gave up after 5 attempts each" : "all clear"}</div>
+        </div>
+      </section>
+      <h2>Failed tasks by type <span class="count mono">${s.failed}</span></h2>
+      ${groups}
+    </details>
   </main>`;
 }

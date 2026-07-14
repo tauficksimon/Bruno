@@ -4,12 +4,17 @@ import {
   listInstantlyAccounts,
   getInstantlyCampaign,
   getCampaignAnalyticsOverview,
+  getLeadRecord,
+  interestStatusLabel,
+  leadStatusLabel,
+  listLeadEmails,
   listRecentReplies,
   listCampaignLeads,
   countCampaignLeads,
   getWarmupAnalytics,
   type InstantlyCampaign
 } from "../integrations/instantly.js";
+import { getLeadActivity } from "../db/dashboard.js";
 import { getPendingDraftCount, listRecentDailyMetrics } from "../db/metrics.js";
 import { isAgentPaused, setAgentPaused } from "../db/config.js";
 import { classifyReply } from "./replyIntentAgent.js";
@@ -231,6 +236,66 @@ const tools: AgentTool[] = [
     }
   },
   {
+    name: "get_lead_history",
+    description:
+      "Everything known about one lead by email address: who they are, pipeline status, engagement, the full email thread (what we sent and what they replied), Bruno's classifications, and what was approved or edited. Use this to prep the team before a call or answer any question about a specific person or company.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        email: { type: "string", description: "The lead's email address." }
+      },
+      required: ["email"]
+    },
+    run: async (input) => {
+      const email = String(input.email ?? "").trim();
+      if (!email) throw new Error("An email address is required.");
+
+      const [record, thread, activity] = await Promise.all([
+        getLeadRecord({ email }).catch(() => undefined),
+        listLeadEmails({ leadEmail: email, limit: 30 }).catch(() => []),
+        getLeadActivity(email)
+      ]);
+
+      return {
+        untrusted_prospect_email: email,
+        untrusted_prospect_name: record ? [record.firstName, record.lastName].filter(Boolean).join(" ") || undefined : undefined,
+        untrusted_company_name: record?.companyName,
+        pipeline: record
+          ? {
+              sequence_status: leadStatusLabel(record.status),
+              interest_status: interestStatusLabel(record.interestStatus),
+              opens: record.openCount,
+              clicks: record.clickCount,
+              replies: record.replyCount,
+              last_contact: record.lastContactAt
+            }
+          : "not found in Instantly (may only exist in Bruno's records)",
+        thread: thread.slice(-8).map((item) => ({
+          direction: item.direction,
+          at: item.at,
+          subject: item.subject,
+          ...(item.direction === "received"
+            ? { untrusted_prospect_text: item.text?.slice(0, 400) }
+            : { our_text: item.text?.slice(0, 400) })
+        })),
+        bruno_reads: activity.classifications.map((c) => ({
+          at: c.created_at,
+          intent: c.intent,
+          confidence: c.confidence,
+          reason: c.reason,
+          suggested_next_action: c.suggested_next_action,
+          draft_status: c.draft_status
+        })),
+        human_decisions: activity.approvals.map((a) => ({
+          at: a.created_at,
+          action: a.action,
+          notes: a.notes
+        })),
+        suppressions: activity.suppressions
+      };
+    }
+  },
+  {
     name: "set_agent_paused",
     description:
       "Turn the internal agent kill switch on or off. This pauses or resumes this app's polling/classify/draft loops only; it does not pause or resume Instantly campaigns.",
@@ -258,7 +323,7 @@ const tools: AgentTool[] = [
 
 async function buildSystemPrompt(): Promise<string> {
   const [liveContext, paused] = await Promise.all([buildLiveContext(), isAgentPaused()]);
-  const identityCore = `You are the AI SDR agent that runs Kinta's cold-email outbound program on Instantly.
+  const identityCore = `You are Bruno, the AI SDR agent that runs Kinta's cold-email outbound program on Instantly. The team addresses you by name.
 
 You report to the Kinta team — including the founder/boss — in plain, direct language, the way a sharp sales rep would give a status update.
 

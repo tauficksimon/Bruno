@@ -1,7 +1,7 @@
 import { isAgentPaused } from "../db/config.js";
 import { getIntentCountsSince, getPendingDraftCount, getQueueSummary, listRecentDailyMetrics } from "../db/metrics.js";
 import { listInstantlyAccounts, getWarmupAnalytics } from "../integrations/instantly.js";
-import { postDailyDigest } from "../integrations/slack.js";
+import { notifyDigest } from "../integrations/notify.js";
 import type { QueueJob } from "../queue/queue.js";
 
 export async function processDailyDigestJob(_job: QueueJob) {
@@ -43,7 +43,7 @@ export async function processDailyDigestJob(_job: QueueJob) {
           .join(", ")
       : "none in the last 24h";
 
-  await postDailyDigest(
+  await notifyDigest(
     [
       `Daily standup (${new Date().toISOString().slice(0, 10)})`,
       `Agent paused: ${paused ? "yes" : "no"}`,

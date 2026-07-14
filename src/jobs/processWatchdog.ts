@@ -1,7 +1,7 @@
 import { activateAlertOnce, clearAlertOnce, isAgentPaused } from "../db/config.js";
 import { getDraftsPendingLongerThan, getOldestQueuedJobAgeMinutes, listRecentDailyMetrics } from "../db/metrics.js";
 import { getWarmupAnalytics, listInstantlyAccounts } from "../integrations/instantly.js";
-import { postError, postHotReply } from "../integrations/slack.js";
+import { notifyAlert, notifyHotReply } from "../integrations/notify.js";
 import type { QueueJob } from "../queue/queue.js";
 
 export async function processWatchdogJob(_job: QueueJob) {
@@ -15,7 +15,7 @@ export async function processWatchdogJob(_job: QueueJob) {
 async function checkPaused() {
   if (await isAgentPaused()) {
     if (await activateAlertOnce("agent-paused-watchdog")) {
-      await postError("Agent kill switch is on. Sensing/reporting still runs, but reply polling and drafting actions are paused.");
+      await notifyAlert("Agent kill switch is on. Sensing/reporting still runs, but reply polling and drafting actions are paused.");
     }
     return;
   }
@@ -36,7 +36,7 @@ async function checkBounceRate() {
     const alertKey = `bounce-rate:${key}`;
     if (row.sends >= 20 && bounceRate > 0.03) {
       if (await activateAlertOnce(alertKey, { sends: row.sends, bounces: row.bounces })) {
-        await postError(
+        await notifyAlert(
           `Watchdog: bounce rate is ${(bounceRate * 100).toFixed(1)}% for ${row.campaign_name ?? key} (${row.bounces}/${row.sends}). Recommend pausing scale until reviewed.`
         );
       }
@@ -56,7 +56,7 @@ async function checkWarmup() {
     const alertKey = `warmup:${item.email}`;
     if (item.last7DaysSent > 0 && item.inboxLandingRate < 0.9) {
       if (await activateAlertOnce(alertKey, item)) {
-        await postError(
+        await notifyAlert(
           `Watchdog: warmup inbox landing is ${Math.round(item.inboxLandingRate * 100)}% for ${item.email}, below the 90% threshold.`
         );
       }
@@ -70,7 +70,7 @@ async function checkQueueAge() {
   const oldestQueuedMinutes = await getOldestQueuedJobAgeMinutes();
   if (oldestQueuedMinutes !== undefined && oldestQueuedMinutes > 15) {
     if (await activateAlertOnce("queue-oldest", { oldestQueuedMinutes })) {
-      await postError(`Watchdog: oldest queued job has waited ${oldestQueuedMinutes} minutes (>15m).`);
+      await notifyAlert(`Watchdog: oldest queued job has waited ${oldestQueuedMinutes} minutes (>15m).`);
     }
     return;
   }
@@ -82,7 +82,7 @@ async function checkStaleDrafts() {
   const stale = await getDraftsPendingLongerThan(2);
   if (stale.count > 0) {
     if (await activateAlertOnce("drafts-stale", stale)) {
-      await postHotReply(
+      await notifyHotReply(
         `Watchdog: ${stale.count} draft${stale.count === 1 ? "" : "s"} pending review for more than 2 hours${
           stale.oldestMinutes ? ` (oldest ${stale.oldestMinutes} minutes)` : ""
         }.`

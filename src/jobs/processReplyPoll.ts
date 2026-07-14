@@ -1,7 +1,7 @@
-import { activateAlertOnce, clearAlertOnce, isAgentPaused } from "../db/config.js";
+import { activateAlertOnce, clearAlertOnce, isAgentPaused, setConfigValue } from "../db/config.js";
 import { recordEvent } from "../db/events.js";
 import { listInstantlyCampaigns, listRecentReplies } from "../integrations/instantly.js";
-import { postError } from "../integrations/slack.js";
+import { notifyAlert } from "../integrations/notify.js";
 import { enqueueJob, type QueueJob } from "../queue/queue.js";
 import { normalizeInstantlyEvent } from "../webhooks/normalizeInstantlyEvent.js";
 
@@ -16,7 +16,7 @@ export async function processReplyPollJob(job: QueueJob) {
 
   if (await isAgentPaused()) {
     if (await activateAlertOnce("reply-poll-paused")) {
-      await postError("Agent kill switch is on. Skipping reply polling so no new classify/draft work starts.");
+      await notifyAlert("Agent kill switch is on. Skipping reply polling so no new classify/draft work starts.");
     }
     return;
   }
@@ -68,6 +68,9 @@ export async function processReplyPollJob(job: QueueJob) {
       });
     }
   }
+
+  // Heartbeat: the dashboard's "replies last checked X ago" reads this.
+  await setConfigValue("last_poll_success_at", new Date().toISOString());
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
