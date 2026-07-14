@@ -9,7 +9,7 @@ export interface ChatTurn {
 }
 
 export interface ShellContext {
-  active: "agent" | "approvals" | "replies" | "metrics" | "ops";
+  active: "bruno" | "inbox" | "campaign" | "system";
   title: string;
   pendingCount: number;
   failedJobs: number;
@@ -71,41 +71,40 @@ export function renderChatTurns(turns: ChatTurn[], emptyHint: string) {
     .map((turn) =>
       turn.role === "user"
         ? `<div class="msg msg-user">${escapeHtml(turn.content)}</div>`
-        : `<div class="msg msg-agent"><div class="msg-tag">agent</div>${escapeHtml(turn.content)}</div>`
+        : `<div class="msg msg-agent"><div class="msg-tag">bruno</div>${escapeHtml(turn.content)}</div>`
     )
     .join("\n");
 }
 
 const NAV_ITEMS: Array<{ key: ShellContext["active"]; href: string; label: string }> = [
-  { key: "agent", href: "/dashboard", label: "Agent" },
-  { key: "approvals", href: "/dashboard/approvals", label: "Approvals" },
-  { key: "replies", href: "/dashboard/replies", label: "Replies" },
-  { key: "metrics", href: "/dashboard/metrics", label: "Metrics" },
-  { key: "ops", href: "/dashboard/ops", label: "Operations" }
+  { key: "bruno", href: "/dashboard", label: "Bruno" },
+  { key: "inbox", href: "/dashboard/inbox", label: "Inbox" },
+  { key: "campaign", href: "/dashboard/campaign", label: "Campaign" },
+  { key: "system", href: "/dashboard/system", label: "System" }
 ];
 
 function navCount(item: ShellContext["active"], ctx: ShellContext) {
-  if (item === "approvals" && ctx.pendingCount > 0) return `<span class="nav-count">${ctx.pendingCount}</span>`;
-  if (item === "ops" && ctx.failedJobs > 0) return `<span class="nav-count nav-count-bad">${ctx.failedJobs}</span>`;
+  if (item === "inbox" && ctx.pendingCount > 0) return `<span class="nav-count">${ctx.pendingCount}</span>`;
+  if (item === "system" && ctx.failedJobs > 0) return `<span class="nav-count nav-count-bad">${ctx.failedJobs}</span>`;
   return "";
 }
 
 function renderDock(ctx: ShellContext) {
-  if (ctx.active === "agent" || !ctx.dockTurns) return "";
+  if (ctx.active === "bruno" || !ctx.dockTurns) return "";
   return `
-  <button class="dock-toggle" id="dock-toggle" aria-label="Chat with the agent">✳ <span>Agent</span></button>
+  <button class="dock-toggle" id="dock-toggle" aria-label="Chat with Bruno">✳ <span>Bruno</span></button>
   <div class="dock" id="dock" hidden>
     <div class="dock-head">
-      <span class="mono">KINTA AGENT</span>
+      <span class="mono">BRUNO</span>
       <a class="dock-expand mono" href="/dashboard">full view ↗</a>
       <button class="dock-close" id="dock-close" aria-label="Close">×</button>
     </div>
     <div class="chat" data-chat>
       <div class="chat-scroll" data-chat-scroll>
-        ${renderChatTurns(ctx.dockTurns.slice(-8), "Ask anything — campaign numbers, inbox health, a draft…")}
+        ${renderChatTurns(ctx.dockTurns.slice(-8), "Ask Bruno anything — campaign numbers, inbox health, a draft…")}
       </div>
       <form class="composer" data-chat-form>
-        <textarea name="message" rows="2" placeholder="Ask the agent…" required></textarea>
+        <textarea name="message" rows="2" placeholder="Ask Bruno…" required></textarea>
         <button class="btn btn-send" type="submit">Send</button>
       </form>
     </div>
@@ -119,7 +118,7 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
     : `<span class="chip chip-live"><span class="dot"></span>running</span>`;
   const failedChip =
     ctx.failedJobs > 0
-      ? `<a class="chip chip-warn" href="/dashboard/ops">${ctx.failedJobs} failed job${ctx.failedJobs === 1 ? "" : "s"}</a>`
+      ? `<a class="chip chip-warn" href="/dashboard/system">${ctx.failedJobs} failed job${ctx.failedJobs === 1 ? "" : "s"}</a>`
       : "";
   const navHtml = NAV_ITEMS.map(
     (item) =>
@@ -421,6 +420,44 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
 
   footer.page-foot { text-align: center; color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 14px; }
 
+  /* ——— Briefing (home) ——— */
+  .briefing {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 14px 18px 12px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(26,26,26,0.04);
+  }
+  .briefing-title { font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .briefing-row { display: flex; gap: 10px; align-items: baseline; font-size: 13.5px; padding: 4px 0; overflow-wrap: anywhere; }
+  .briefing-row a { color: var(--accent); text-decoration: none; font-weight: 600; white-space: nowrap; }
+  .briefing-row a:hover { text-decoration: underline; }
+  .b-flag {
+    flex: 0 0 auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+  }
+  .b-flag.b-hot { background: var(--warn-bg); color: var(--cta-hover); }
+  .b-flag.b-warn { background: var(--danger-soft); color: var(--danger); }
+  .b-flag.b-ok { background: var(--ok-soft); color: var(--ok); }
+
+  /* ——— System status hero ——— */
+  .status-hero {
+    display: flex; gap: 16px; align-items: flex-start;
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 20px; font-size: 15px; box-shadow: 0 1px 2px rgba(26,26,26,0.04);
+  }
+  .status-mark {
+    flex: 0 0 auto; width: 44px; height: 44px; line-height: 44px; text-align: center;
+    border-radius: 50%; font-family: var(--mono); font-size: 22px; font-weight: 600;
+  }
+  .status-ok { border-color: var(--ok); }
+  .status-ok .status-mark { background: var(--ok-soft); color: var(--ok); }
+  .status-bad { border-color: var(--cta); }
+  .status-bad .status-mark { background: var(--warn-bg); color: var(--cta-hover); }
+  details.tech { margin-top: 22px; }
+  details.tech > summary {
+    cursor: pointer; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 6px 0; user-select: none;
+  }
+  details.tech > summary:hover { color: var(--accent); }
+
   @media (max-width: 880px) {
     body { flex-direction: column; }
     .side { width: 100%; flex: none; height: auto; position: static; }
@@ -438,7 +475,7 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
 </head>
 <body data-autorefresh="${ctx.autoRefresh ? "1" : "0"}">
 <aside class="side">
-  <div class="brand">Kinta <em>·</em> Console<small>outbound agent</small></div>
+  <div class="brand">Bruno<small>Kinta <em>·</em> outbound</small></div>
   <nav class="nav">
     ${navHtml}
   </nav>
@@ -515,7 +552,7 @@ ${renderDock(ctx)}
       textarea.value = "";
       form.querySelector("button").disabled = true;
       appendMsg(scroll, "msg-user", message);
-      var pending = appendMsg(scroll, "msg-agent msg-pending", "", "agent");
+      var pending = appendMsg(scroll, "msg-agent msg-pending", "", "bruno");
       pending.insertAdjacentHTML("beforeend", '<span class="dots"><span>●</span> <span>●</span> <span>●</span></span>');
 
       fetch("/dashboard/api/chat", {
@@ -527,14 +564,14 @@ ${renderDock(ctx)}
         .then(function (result) {
           pending.remove();
           if (result.ok) {
-            appendMsg(scroll, "msg-agent", result.body.text, "agent", result.body.toolCalls);
+            appendMsg(scroll, "msg-agent", result.body.text, "bruno", result.body.toolCalls);
           } else {
-            appendMsg(scroll, "msg-agent", (result.body && result.body.error) || "Something went wrong — try again.", "agent");
+            appendMsg(scroll, "msg-agent", (result.body && result.body.error) || "Something went wrong — try again.", "bruno");
           }
         })
         .catch(function () {
           pending.remove();
-          appendMsg(scroll, "msg-agent", "Network error — try again.", "agent");
+          appendMsg(scroll, "msg-agent", "Network error — try again.", "bruno");
         })
         .finally(function () {
           chatBusy = false;
@@ -594,6 +631,7 @@ ${renderDock(ctx)}
     var button = event.target.closest("button[data-action]");
     if (!button) return;
     var card = button.closest(".card");
+    if (!card) return;
     var action = button.getAttribute("data-action");
     var who = card.getAttribute("data-who") || "this lead";
     if (action === "approve" && !confirm("Send this reply to " + who + "?")) return;

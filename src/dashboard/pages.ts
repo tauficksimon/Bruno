@@ -1,13 +1,64 @@
-// Page bodies for the dashboard shell. Data models are assembled in routes.ts;
+// Page bodies for the console shell. Data models are assembled in routes.ts;
 // these functions only turn them into HTML (everything dynamic escaped).
 
 import { escapeHtml, intentBadge, relativeTime, renderChatTurns, whoLabel, type ChatTurn } from "./ui.js";
 
 const INTENT_ORDER = ["positive", "question", "objection", "not_now", "negative", "unsubscribe", "unclear"];
 
-// ————— Agent (chat home) —————
+// ————— Bruno (home: briefing + chat) —————
 
-export function renderAgentPage(turns: ChatTurn[]) {
+export interface BriefingModel {
+  agentPaused: boolean;
+  pendingCount: number;
+  hottestWho?: string;
+  needsReadCount: number;
+  replies24h: Array<{ intent: string; count: number }>;
+  sendsYesterday?: number;
+  failedJobs: number;
+  lastPollAgo?: string;
+}
+
+function briefingRows(b: BriefingModel) {
+  const rows: string[] = [];
+
+  if (b.agentPaused) {
+    rows.push(`<span class="b-flag b-warn">paused</span> Bruno is paused — replies aren't being processed. Resume him from the sidebar.`);
+  }
+  if (b.pendingCount > 0) {
+    rows.push(
+      `<span class="b-flag b-hot">act</span> <strong>${b.pendingCount} repl${b.pendingCount === 1 ? "y" : "ies"} waiting on you</strong>${
+        b.hottestWho ? ` — hottest: ${escapeHtml(b.hottestWho)}` : ""
+      } <a href="/dashboard/inbox">open Inbox →</a>`
+    );
+  }
+  if (b.needsReadCount > 0) {
+    rows.push(
+      `<span class="b-flag">read</span> ${b.needsReadCount} repl${b.needsReadCount === 1 ? "y" : "ies"} Bruno couldn't classify — worth a human glance. <a href="/dashboard/inbox">Inbox →</a>`
+    );
+  }
+  const totalNew = b.replies24h.reduce((sum, r) => sum + r.count, 0);
+  if (totalNew > 0) {
+    const parts = b.replies24h
+      .slice()
+      .sort((a, z) => INTENT_ORDER.indexOf(a.intent) - INTENT_ORDER.indexOf(z.intent))
+      .map((r) => `${r.count} ${r.intent.replace("_", " ")}`);
+    rows.push(`<span class="b-flag">new</span> ${totalNew} new repl${totalNew === 1 ? "y" : "ies"} in the last 24h: ${parts.join(", ")}.`);
+  }
+  if (b.sendsYesterday !== undefined) {
+    rows.push(`<span class="b-flag">sent</span> ${b.sendsYesterday} email${b.sendsYesterday === 1 ? "" : "s"} went out yesterday. <a href="/dashboard/campaign">Campaign →</a>`);
+  }
+  if (b.failedJobs > 0) {
+    rows.push(`<span class="b-flag b-warn">check</span> ${b.failedJobs} background task${b.failedJobs === 1 ? "" : "s"} failed. <a href="/dashboard/system">System →</a>`);
+  }
+  if (rows.length === 0 || (!b.agentPaused && b.failedJobs === 0)) {
+    rows.push(
+      `<span class="b-flag b-ok">ok</span> Everything running normally${b.lastPollAgo ? ` — replies last checked ${b.lastPollAgo}` : ""}.`
+    );
+  }
+  return rows;
+}
+
+export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel) {
   const suggestions =
     turns.length === 0
       ? `<div class="suggestions">
@@ -19,23 +70,29 @@ export function renderAgentPage(turns: ChatTurn[]) {
       : "";
   return `
   <main class="main-chat reveal">
+    <section class="briefing">
+      <div class="briefing-title mono">Today</div>
+      ${briefingRows(briefing)
+        .map((row) => `<div class="briefing-row">${row}</div>`)
+        .join("\n")}
+    </section>
     <div class="chat" data-chat>
       <div class="chat-scroll" data-chat-scroll>
         ${renderChatTurns(
           turns,
-          "This is your agent — it watches the outbound campaign, reads every reply, and answers with live numbers. Ask it anything."
+          "This is Bruno — he watches the outbound campaign, reads every reply, and answers with live numbers. Ask him anything."
         )}
       </div>
       ${suggestions}
       <form class="composer" data-chat-form>
-        <textarea name="message" rows="2" placeholder="Ask the agent… (Enter to send, Shift+Enter for a new line)" required></textarea>
+        <textarea name="message" rows="2" placeholder="Ask Bruno… (Enter to send, Shift+Enter for a new line)" required></textarea>
         <button class="btn btn-send" type="submit">Send</button>
       </form>
     </div>
   </main>`;
 }
 
-// ————— Approvals —————
+// ————— Inbox —————
 
 export interface DraftCardModel {
   id: string;
@@ -51,6 +108,15 @@ export interface DraftCardModel {
   createdAt: string;
   sendFrom?: string;
   canSend: boolean;
+}
+
+export interface ReplyFeedModel {
+  companyName?: string;
+  email?: string;
+  intent: string;
+  reason: string;
+  createdAt: string;
+  prospectText?: string;
 }
 
 export interface ActivityModel {
@@ -82,10 +148,10 @@ function renderDraftCard(draft: DraftCardModel, now: Date) {
     </header>
     ${
       draft.prospectText
-        ? `<div class="prospect"><div class="section-label">Prospect wrote</div><blockquote>${escapeHtml(draft.prospectText)}</blockquote></div>`
+        ? `<div class="prospect"><div class="section-label">They wrote</div><blockquote>${escapeHtml(draft.prospectText)}</blockquote></div>`
         : ""
     }
-    <div class="agent-note"><span class="section-label">Agent read</span> ${escapeHtml(draft.reason)}${
+    <div class="agent-note"><span class="section-label">Bruno's read</span> ${escapeHtml(draft.reason)}${
       draft.internalReason ? ` · <em>${escapeHtml(draft.internalReason)}</em>` : ""
     }</div>
     <label class="field">
@@ -93,7 +159,7 @@ function renderDraftCard(draft: DraftCardModel, now: Date) {
       <input type="text" name="subject" value="${escapeHtml(draft.subject)}" />
     </label>
     <label class="field">
-      <span class="section-label">Draft reply — edit freely, then approve</span>
+      <span class="section-label">Bruno's draft — edit freely, then approve</span>
       <textarea name="body" rows="9">${escapeHtml(draft.body)}</textarea>
     </label>
     <footer class="card-actions">
@@ -105,13 +171,71 @@ function renderDraftCard(draft: DraftCardModel, now: Date) {
   </article>`;
 }
 
-export function renderApprovalsPage(drafts: DraftCardModel[], activity: ActivityModel[], now: Date) {
+function handledDescription(intent: string) {
+  switch (intent) {
+    case "negative":
+      return "not interested — Bruno stopped their emails and added them to the do-not-contact list";
+    case "unsubscribe":
+      return "asked to unsubscribe — honored and added to the do-not-contact list";
+    case "not_now":
+      return "not right now — logged to revisit in a couple of months";
+    default:
+      return "logged";
+  }
+}
+
+export function renderInboxPage(
+  drafts: DraftCardModel[],
+  needsRead: ReplyFeedModel[],
+  handled: ReplyFeedModel[],
+  activity: ActivityModel[],
+  now: Date
+) {
   const cards = drafts.map((draft) => renderDraftCard(draft, now)).join("\n");
   const empty = `
     <div class="empty">
       <div class="empty-mark">✓</div>
-      <p>Nothing waiting. New replies land here within ~5 minutes of arriving.</p>
+      <p>No one is waiting on you. New replies show up here within ~5 minutes of arriving.</p>
     </div>`;
+
+  const needsReadHtml =
+    needsRead.length === 0
+      ? ""
+      : `
+      <h2>Needs your read <span class="count mono">${needsRead.length}</span></h2>
+      <p class="muted" style="margin-top:-4px">Bruno wasn't confident what these mean — give them a quick human glance; if one is warm, reply from Instantly directly.</p>
+      ${needsRead
+        .map(
+          (row) => `
+          <article class="card">
+            <header class="card-head">
+              <div><h3>${escapeHtml(whoLabel(row.companyName, row.email))}</h3>
+              ${row.email ? `<div class="mono muted">${escapeHtml(row.email)}</div>` : ""}</div>
+              <div class="card-meta">${intentBadge(row.intent)}<span class="mono muted">${relativeTime(row.createdAt, now)}</span></div>
+            </header>
+            ${row.prospectText ? `<div class="prospect"><div class="section-label">They wrote</div><blockquote>${escapeHtml(row.prospectText)}</blockquote></div>` : ""}
+            <div class="agent-note"><span class="section-label">Bruno's read</span> ${escapeHtml(row.reason)}</div>
+          </article>`
+        )
+        .join("\n")}`;
+
+  const handledHtml =
+    handled.length === 0
+      ? `<p class="muted">Nothing yet — negative and unsubscribe replies will be handled automatically and listed here.</p>`
+      : handled
+          .map(
+            (row) => `
+            <div class="feed-row">
+              <div class="feed-top">
+                <strong>${escapeHtml(whoLabel(row.companyName, row.email))}</strong>
+                ${intentBadge(row.intent)}
+                <span class="mono muted">${relativeTime(row.createdAt, now)}</span>
+              </div>
+              <div class="feed-reason muted">${escapeHtml(handledDescription(row.intent))}</div>
+            </div>`
+          )
+          .join("\n");
+
   const log =
     activity.length === 0
       ? `<p class="muted">No approvals or rejections yet.</p>`
@@ -125,71 +249,22 @@ export function renderApprovalsPage(drafts: DraftCardModel[], activity: Activity
             </div>`
           )
           .join("\n");
+
   return `
   <main class="reveal">
     <h2>Waiting on you <span class="count mono" id="pending-count">${drafts.length}</span></h2>
     ${drafts.length > 0 ? cards : empty}
+    ${needsReadHtml}
+    <h2>Handled for you · 7d</h2>
+    ${handledHtml}
     <h2>Recent actions</h2>
     ${log}
   </main>`;
 }
 
-// ————— Replies —————
+// ————— Campaign —————
 
-export interface ReplyFeedModel {
-  companyName?: string;
-  email?: string;
-  intent: string;
-  reason: string;
-  createdAt: string;
-}
-
-export function renderRepliesPage(feed: ReplyFeedModel[], intentCounts: Record<string, number>, now: Date) {
-  const entries = INTENT_ORDER.map((intent) => ({ intent, count: intentCounts[intent] ?? 0 })).filter((e) => e.count > 0);
-  const max = entries.length > 0 ? Math.max(...entries.map((e) => e.count)) : 0;
-  const mix =
-    entries.length === 0
-      ? `<p class="muted">No classified replies in the last 7 days.</p>`
-      : entries
-          .map(
-            (entry) => `
-            <div class="mix-row">
-              <span class="mix-label">${intentBadge(entry.intent)}</span>
-              <span class="mix-track"><span class="mix-bar" style="width:${Math.max(4, Math.round((entry.count / max) * 100))}%"></span></span>
-              <span class="mix-count mono">${entry.count}</span>
-            </div>`
-          )
-          .join("\n");
-
-  const rows =
-    feed.length === 0
-      ? `<p class="muted">No replies classified yet.</p>`
-      : feed
-          .map(
-            (row) => `
-            <div class="feed-row">
-              <div class="feed-top">
-                <strong>${escapeHtml(whoLabel(row.companyName, row.email))}</strong>
-                ${intentBadge(row.intent)}
-                <span class="mono muted">${relativeTime(row.createdAt, now)}</span>
-              </div>
-              <div class="feed-reason muted">${escapeHtml(row.reason)}</div>
-            </div>`
-          )
-          .join("\n");
-
-  return `
-  <main class="reveal">
-    <h2>Reply mix · 7d</h2>
-    ${mix}
-    <h2>All classified replies</h2>
-    ${rows}
-  </main>`;
-}
-
-// ————— Metrics —————
-
-export interface MetricsModel {
+export interface CampaignModel {
   sends7d: number;
   replies7d: number;
   bounces7d: number;
@@ -202,10 +277,10 @@ function formatPercent(numerator: number, denominator: number) {
   return `${((numerator / denominator) * 100).toFixed(1)}%`;
 }
 
-export function renderMetricsPage(m: MetricsModel) {
+export function renderCampaignPage(m: CampaignModel) {
   const table =
     m.daily.length === 0
-      ? `<p class="muted">No metrics yet — the nightly rollup fills this in once sending starts.</p>`
+      ? `<p class="muted">No numbers yet — this fills in nightly once sending starts.</p>`
       : `
       <div class="table-scroll">
         <table>
@@ -242,7 +317,7 @@ export function renderMetricsPage(m: MetricsModel) {
       <div class="tile">
         <div class="tile-label">Reply rate · 7d</div>
         <div class="tile-value">${formatPercent(m.replies7d, m.sends7d)}</div>
-        <div class="tile-sub">golden rule: scale at &gt;3%</div>
+        <div class="tile-sub">${m.sends7d < 300 ? "too few sends to judge yet (need 300+)" : "golden rule: scale at >3%"}</div>
       </div>
       <div class="tile">
         <div class="tile-label">Bounce rate · 7d</div>
@@ -255,27 +330,69 @@ export function renderMetricsPage(m: MetricsModel) {
   </main>`;
 }
 
-// ————— Operations —————
+// ————— System —————
 
-export interface OpsModel {
+export interface SystemModel {
+  agentPaused: boolean;
   queued: number;
   running: number;
   failed: number;
   oldestQueuedMinutes?: number;
+  lastPollAgo?: string;
+  lastPollStale: boolean;
   groups: Array<{ name: string; count: number; last_failed_at: string; latest_error: string | null }>;
 }
 
-export function renderOpsPage(ops: OpsModel, now: Date) {
-  const failedTileClass = ops.failed > 0 ? " tile-bad" : "";
+/** Translate the most common raw errors into owner language. */
+function plainError(error: string | null) {
+  if (!error) return undefined;
+  if (/INSTANTLY_API_KEY is not configured|401|Unauthorized|Invalid API key/i.test(error)) {
+    return "the Instantly connection is being rejected — the API key is missing or wrong. Emails may still send, but Bruno can't see replies until it's fixed.";
+  }
+  if (/ANTHROPIC/i.test(error)) {
+    return "the Claude AI key is missing or invalid — Bruno can't classify replies or draft responses until it's fixed.";
+  }
+  if (/ECONNREFUSED|ETIMEDOUT|fetch failed|ENOTFOUND/i.test(error)) {
+    return "a network problem reaching an outside service — usually temporary.";
+  }
+  return undefined;
+}
+
+export function renderSystemPage(s: SystemModel, now: Date) {
+  const problems: string[] = [];
+  if (s.agentPaused) problems.push("Bruno is <strong>paused</strong> — nothing is being processed until you resume him (sidebar button).");
+  if (s.lastPollStale) {
+    problems.push(`Bruno hasn't been able to check for replies recently${s.lastPollAgo ? ` (last success ${s.lastPollAgo})` : ""}.`);
+  }
+  if (s.failed > 0) {
+    const latest = s.groups[0];
+    const translated = latest ? plainError(latest.latest_error) : undefined;
+    problems.push(
+      `${s.failed} background task${s.failed === 1 ? "" : "s"} gave up after retrying.${translated ? ` In plain terms: ${translated}` : ""}`
+    );
+  }
+
+  const hero =
+    problems.length === 0
+      ? `<div class="status-hero status-ok">
+           <div class="status-mark">✓</div>
+           <div><strong>Everything is running normally.</strong><br/>
+           <span class="muted">Bruno checks for replies every 5 minutes${s.lastPollAgo ? ` — last check ${s.lastPollAgo}` : ""}. Silence here means healthy.</span></div>
+         </div>`
+      : `<div class="status-hero status-bad">
+           <div class="status-mark">!</div>
+           <div>${problems.map((p) => `<p style="margin:0 0 6px">${p}</p>`).join("")}</div>
+         </div>`;
+
   const groups =
-    ops.groups.length === 0
-      ? `<div class="empty"><div class="empty-mark">✓</div><p>No failed jobs. Silence means healthy.</p></div>`
+    s.groups.length === 0
+      ? `<p class="muted">No failed tasks.</p>`
       : `
       <div class="table-scroll">
         <table>
-          <thead><tr><th>Job</th><th class="num">Failures</th><th>Last failed</th><th>Most recent error</th><th></th></tr></thead>
+          <thead><tr><th>Task</th><th class="num">Failures</th><th>Last failed</th><th>Most recent error</th><th></th></tr></thead>
           <tbody>
-            ${ops.groups
+            ${s.groups
               .map(
                 (group) => `
                 <tr>
@@ -300,32 +417,28 @@ export function renderOpsPage(ops: OpsModel, now: Date) {
 
   return `
   <main class="reveal">
-    <section class="kpis">
-      <div class="tile">
-        <div class="tile-label">Queued</div>
-        <div class="tile-value">${ops.queued}</div>
-        <div class="tile-sub">${ops.oldestQueuedMinutes !== undefined ? `oldest waiting ${ops.oldestQueuedMinutes}m` : "nothing overdue"}</div>
-      </div>
-      <div class="tile">
-        <div class="tile-label">Running</div>
-        <div class="tile-value">${ops.running}</div>
-        <div class="tile-sub">in flight right now</div>
-      </div>
-      <div class="tile${failedTileClass}">
-        <div class="tile-label">Failed</div>
-        <div class="tile-value">${ops.failed}</div>
-        <div class="tile-sub">${ops.failed > 0 ? "gave up after 5 attempts each" : "all clear"}</div>
-      </div>
-    </section>
-    <h2>What "failed" means</h2>
-    <p class="muted" style="max-width:640px">
-      Background work (checking for replies, rolling up metrics, health checks) runs as jobs.
-      A job retries itself up to 5 times; only then is it marked failed and shown here with its
-      error. A repeating count on the same job usually means one root cause — read the most
-      recent error, fix the cause, then use <strong>Retry latest</strong> to confirm the fix and
-      <strong>Clear</strong> to remove the old records.
-    </p>
-    <h2>Failed jobs by type <span class="count mono">${ops.failed}</span></h2>
-    ${groups}
+    ${hero}
+    <details class="tech">
+      <summary class="mono">Technical details</summary>
+      <section class="kpis kpis-3" style="margin-top:16px">
+        <div class="tile">
+          <div class="tile-label">Queued</div>
+          <div class="tile-value">${s.queued}</div>
+          <div class="tile-sub">${s.oldestQueuedMinutes !== undefined ? `oldest waiting ${s.oldestQueuedMinutes}m` : "nothing overdue"}</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Running</div>
+          <div class="tile-value">${s.running}</div>
+          <div class="tile-sub">in flight right now</div>
+        </div>
+        <div class="tile${s.failed > 0 ? " tile-bad" : ""}">
+          <div class="tile-label">Failed</div>
+          <div class="tile-value">${s.failed}</div>
+          <div class="tile-sub">${s.failed > 0 ? "gave up after 5 attempts each" : "all clear"}</div>
+        </div>
+      </section>
+      <h2>Failed tasks by type <span class="count mono">${s.failed}</span></h2>
+      ${groups}
+    </details>
   </main>`;
 }

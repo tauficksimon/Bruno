@@ -1,4 +1,4 @@
-import { activateAlertOnce, clearAlertOnce, isAgentPaused } from "../db/config.js";
+import { activateAlertOnce, clearAlertOnce, isAgentPaused, setConfigValue } from "../db/config.js";
 import { recordEvent } from "../db/events.js";
 import { listInstantlyCampaigns, listRecentReplies } from "../integrations/instantly.js";
 import { postError } from "../integrations/slack.js";
@@ -68,6 +68,9 @@ export async function processReplyPollJob(job: QueueJob) {
       });
     }
   }
+
+  // Heartbeat: the dashboard's "replies last checked X ago" reads this.
+  await setConfigValue("last_poll_success_at", new Date().toISOString());
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -52,16 +52,13 @@ export async function getDraftWithContext(id: string): Promise<PendingDraftRow |
 /**
  * Atomically claim a pending draft for sending. Only one caller can move a
  * draft out of 'drafted', so a double-clicked Approve button cannot double-send.
+ * Bruno's original subject/body are left untouched — the human's final version
+ * lives on the approvals row (the edit diff is the Phase C learning signal).
  */
-export async function claimDraftForSend(id: string, finalSubject: string | null, finalBody: string) {
+export async function claimDraftForSend(id: string) {
   const result = await pool.query<{ id: string }>(
-    `
-      UPDATE drafts
-      SET status = 'approved', subject = $2, body = $3, updated_at = now()
-      WHERE id = $1 AND status = 'drafted'
-      RETURNING id
-    `,
-    [id, finalSubject, finalBody]
+    "UPDATE drafts SET status = 'approved', updated_at = now() WHERE id = $1 AND status = 'drafted' RETURNING id",
+    [id]
   );
   return result.rowCount === 1;
 }
@@ -88,13 +85,20 @@ export async function recordApproval(input: {
   action: "approved" | "edited" | "rejected";
   actor?: string;
   notes?: string;
+  finalSubject?: string;
+  finalBody?: string;
 }) {
-  await pool.query("INSERT INTO approvals (draft_id, action, actor, notes) VALUES ($1, $2, $3, $4)", [
-    input.draftId,
-    input.action,
-    input.actor ?? "dashboard",
-    input.notes ?? null
-  ]);
+  await pool.query(
+    "INSERT INTO approvals (draft_id, action, actor, notes, final_subject, final_body) VALUES ($1, $2, $3, $4, $5, $6)",
+    [
+      input.draftId,
+      input.action,
+      input.actor ?? "dashboard",
+      input.notes ?? null,
+      input.finalSubject ?? null,
+      input.finalBody ?? null
+    ]
+  );
 }
 
 export interface ReplyFeedRow {
@@ -106,6 +110,7 @@ export interface ReplyFeedRow {
   company_name: string | null;
   created_at: string;
   draft_status: string | null;
+  raw_thread: string | null;
 }
 
 export async function listRecentClassifications(limit = 30): Promise<ReplyFeedRow[]> {
@@ -119,7 +124,8 @@ export async function listRecentClassifications(limit = 30): Promise<ReplyFeedRo
         rc.email,
         rc.company_name,
         rc.created_at::text,
-        d.status AS draft_status
+        d.status AS draft_status,
+        rc.raw_thread
       FROM reply_classifications rc
       LEFT JOIN drafts d ON d.reply_classification_id = rc.id
       ORDER BY rc.created_at DESC
@@ -128,6 +134,25 @@ export async function listRecentClassifications(limit = 30): Promise<ReplyFeedRo
     [limit]
   );
   return result.rows;
+}
+
+/** New replies in the last N hours, grouped by intent — the briefing's raw material. */
+export async function getRecentReplySummary(hours: number) {
+  const result = await pool.query<{ intent: string; count: string; latest_company: string | null }>(
+    `
+      SELECT intent, count(*)::text AS count,
+             (array_agg(coalesce(company_name, email) ORDER BY created_at DESC))[1] AS latest_company
+      FROM reply_classifications
+      WHERE created_at >= now() - ($1::text || ' hours')::interval
+      GROUP BY intent
+    `,
+    [hours]
+  );
+  return result.rows.map((row) => ({
+    intent: row.intent,
+    count: Number(row.count),
+    latestCompany: row.latest_company ?? undefined
+  }));
 }
 
 export interface ApprovalLogRow {

@@ -3,11 +3,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { runOutboundAgent } from "../agents/outboundAgent.js";
 import { env, isProduction } from "../config/env.js";
-import { isAgentPaused, setAgentPaused } from "../db/config.js";
+import { getConfigValue, isAgentPaused, setAgentPaused } from "../db/config.js";
 import { appendConversationTurn, loadConversation } from "../db/conversations.js";
 import {
   claimDraftForSend,
   getDraftWithContext,
+  getRecentReplySummary,
   listPendingDrafts,
   listRecentApprovals,
   listRecentClassifications,
@@ -27,12 +28,12 @@ import {
 import { clearFailedJobs, getFailedJobGroups, retryLatestFailedJob } from "../db/ops.js";
 import { sendReplyEmail } from "../integrations/instantly.js";
 import {
-  renderAgentPage,
-  renderApprovalsPage,
-  renderMetricsPage,
-  renderOpsPage,
-  renderRepliesPage,
-  type DraftCardModel
+  renderBrunoPage,
+  renderCampaignPage,
+  renderInboxPage,
+  renderSystemPage,
+  type DraftCardModel,
+  type ReplyFeedModel
 } from "./pages.js";
 import { renderMessagePage, renderShell, type ShellContext } from "./ui.js";
 
@@ -132,7 +133,7 @@ async function loadShellContext(
     isAgentPaused(),
     getPendingDraftCount(),
     getQueueSummary(),
-    active === "agent" ? Promise.resolve(undefined) : loadConversation(WEB_CHAT_THREAD_KEY, 8)
+    active === "bruno" ? Promise.resolve(undefined) : loadConversation(WEB_CHAT_THREAD_KEY, 8)
   ]);
 
   return {
@@ -206,58 +207,122 @@ const approveBodySchema = z.object({
 
 // ————— Routes —————
 
+/** Minutes since an ISO timestamp; undefined if missing/unparseable. */
+function minutesSince(iso: string | undefined) {
+  if (!iso) return undefined;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return undefined;
+  return Math.max(0, Math.floor((Date.now() - then) / 60000));
+}
+
+function agoLabel(minutes: number | undefined) {
+  if (minutes === undefined) return undefined;
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+const HOT_INTENTS = ["positive", "question", "objection"];
+const HANDLED_INTENTS = ["not_now", "negative", "unsubscribe"];
+
+function toFeedModel(row: { company_name: string | null; email: string | null; intent: string; reason: string; created_at: string; raw_thread: string | null }): ReplyFeedModel {
+  return {
+    companyName: row.company_name ?? undefined,
+    email: row.email ?? undefined,
+    intent: row.intent,
+    reason: row.reason,
+    createdAt: row.created_at,
+    prospectText: row.raw_thread ?? undefined
+  };
+}
+
 export async function registerDashboard(app: FastifyInstance) {
-  // Agent chat home
+  // Old paths → new homes (bookmarks and older links keep working)
+  for (const [from, to] of [
+    ["/dashboard/approvals", "/dashboard/inbox"],
+    ["/dashboard/replies", "/dashboard/inbox"],
+    ["/dashboard/metrics", "/dashboard/campaign"],
+    ["/dashboard/ops", "/dashboard/system"]
+  ] as const) {
+    app.get(from, async (_request, reply) => reply.redirect(to, 301));
+  }
+
+  // Bruno — briefing + chat home
   app.get("/dashboard", async (request, reply) => {
     if (!authorizePage(request, reply, "/dashboard")) return reply;
-    const [shell, turns] = await Promise.all([
-      loadShellContext("agent", "Talk to your agent", false),
-      loadConversation(WEB_CHAT_THREAD_KEY, 40)
+    const [shell, turns, drafts, replies24h, dailyRows, lastPollAt] = await Promise.all([
+      loadShellContext("bruno", "Bruno", false),
+      loadConversation(WEB_CHAT_THREAD_KEY, 40),
+      listPendingDrafts(20),
+      getRecentReplySummary(24),
+      listRecentDailyMetrics(2),
+      getConfigValue<string>("last_poll_success_at")
     ]);
-    return reply.type("text/html").send(renderShell(shell, renderAgentPage(turns)));
+
+    const hottest = drafts
+      .slice()
+      .sort(
+        (a, b) =>
+          HOT_INTENTS.indexOf(a.intent) - HOT_INTENTS.indexOf(b.intent) || a.created_at.localeCompare(b.created_at)
+      )[0];
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const sendsYesterday = dailyRows
+      .filter((row) => row.metric_date === yesterday)
+      .reduce((sum, row) => sum + row.sends, 0);
+
+    return reply.type("text/html").send(
+      renderShell(
+        shell,
+        renderBrunoPage(turns, {
+          agentPaused: shell.agentPaused,
+          pendingCount: shell.pendingCount,
+          hottestWho: hottest ? (hottest.company_name ?? hottest.email ?? undefined) : undefined,
+          needsReadCount: replies24h.find((r) => r.intent === "unclear")?.count ?? 0,
+          replies24h: replies24h.filter((r) => r.intent !== "unclear").map((r) => ({ intent: r.intent, count: r.count })),
+          sendsYesterday: dailyRows.length > 0 ? sendsYesterday : undefined,
+          failedJobs: shell.failedJobs,
+          lastPollAgo: agoLabel(minutesSince(lastPollAt))
+        })
+      )
+    );
   });
 
-  // Approvals
-  app.get("/dashboard/approvals", async (request, reply) => {
-    if (!authorizePage(request, reply, "/dashboard/approvals")) return reply;
-    const [shell, drafts, activity] = await Promise.all([
-      loadShellContext("approvals", "Approvals", true),
+  // Inbox — who replied, hottest first
+  app.get("/dashboard/inbox", async (request, reply) => {
+    if (!authorizePage(request, reply, "/dashboard/inbox")) return reply;
+    const [shell, drafts, feed, activity] = await Promise.all([
+      loadShellContext("inbox", "Inbox", true),
       listPendingDrafts(20),
+      listRecentClassifications(40),
       listRecentApprovals(12)
     ]);
-    const cards = drafts.map(toDraftCard);
+
+    const cards = drafts
+      .map(toDraftCard)
+      .sort(
+        (a, b) => HOT_INTENTS.indexOf(a.intent) - HOT_INTENTS.indexOf(b.intent) || a.createdAt.localeCompare(b.createdAt)
+      );
+    const needsRead = feed.filter((row) => row.intent === "unclear" && row.draft_status === null).slice(0, 10).map(toFeedModel);
+    const handled = feed.filter((row) => HANDLED_INTENTS.includes(row.intent)).slice(0, 15).map(toFeedModel);
     const log = activity.map((row) => ({
       action: row.action,
       companyName: row.company_name ?? undefined,
       email: row.email ?? undefined,
       createdAt: row.created_at
     }));
-    return reply.type("text/html").send(renderShell(shell, renderApprovalsPage(cards, log, shell.generatedAt)));
+
+    return reply
+      .type("text/html")
+      .send(renderShell(shell, renderInboxPage(cards, needsRead, handled, log, shell.generatedAt)));
   });
 
-  // Replies
-  app.get("/dashboard/replies", async (request, reply) => {
-    if (!authorizePage(request, reply, "/dashboard/replies")) return reply;
-    const [shell, feed, intentCounts] = await Promise.all([
-      loadShellContext("replies", "Replies", true),
-      listRecentClassifications(50),
-      getIntentCountsSince(7 * 24)
-    ]);
-    const rows = feed.map((row) => ({
-      companyName: row.company_name ?? undefined,
-      email: row.email ?? undefined,
-      intent: row.intent,
-      reason: row.reason,
-      createdAt: row.created_at
-    }));
-    return reply.type("text/html").send(renderShell(shell, renderRepliesPage(rows, intentCounts, shell.generatedAt)));
-  });
-
-  // Metrics
-  app.get("/dashboard/metrics", async (request, reply) => {
-    if (!authorizePage(request, reply, "/dashboard/metrics")) return reply;
+  // Campaign — is the machine sending, and is it working?
+  app.get("/dashboard/campaign", async (request, reply) => {
+    if (!authorizePage(request, reply, "/dashboard/campaign")) return reply;
     const [shell, dailyRows] = await Promise.all([
-      loadShellContext("metrics", "Metrics", true),
+      loadShellContext("campaign", "Campaign", true),
       listRecentDailyMetrics(7)
     ]);
 
@@ -276,7 +341,7 @@ export async function registerDashboard(app: FastifyInstance) {
     return reply.type("text/html").send(
       renderShell(
         shell,
-        renderMetricsPage({
+        renderCampaignPage({
           sends7d: daily.reduce((sum, day) => sum + day.sends, 0),
           replies7d: daily.reduce((sum, day) => sum + day.replies, 0),
           bounces7d: daily.reduce((sum, day) => sum + day.bounces, 0),
@@ -287,24 +352,29 @@ export async function registerDashboard(app: FastifyInstance) {
     );
   });
 
-  // Operations
-  app.get("/dashboard/ops", async (request, reply) => {
-    if (!authorizePage(request, reply, "/dashboard/ops")) return reply;
-    const [shell, queue, oldestQueuedMinutes, groups] = await Promise.all([
-      loadShellContext("ops", "Operations", true),
+  // System — one honest sentence; tech behind a toggle
+  app.get("/dashboard/system", async (request, reply) => {
+    if (!authorizePage(request, reply, "/dashboard/system")) return reply;
+    const [shell, queue, oldestQueuedMinutes, groups, lastPollAt] = await Promise.all([
+      loadShellContext("system", "System", true),
       getQueueSummary(),
       getOldestQueuedJobAgeMinutes(),
-      getFailedJobGroups()
+      getFailedJobGroups(),
+      getConfigValue<string>("last_poll_success_at")
     ]);
+    const pollAgeMinutes = minutesSince(lastPollAt);
     return reply.type("text/html").send(
       renderShell(
         shell,
-        renderOpsPage(
+        renderSystemPage(
           {
+            agentPaused: shell.agentPaused,
             queued: queue.queued ?? 0,
             running: queue.running ?? 0,
             failed: queue.failed ?? 0,
             oldestQueuedMinutes,
+            lastPollAgo: agoLabel(pollAgeMinutes),
+            lastPollStale: !shell.agentPaused && pollAgeMinutes !== undefined && pollAgeMinutes > 15,
             groups
           },
           shell.generatedAt
@@ -357,7 +427,7 @@ export async function registerDashboard(app: FastifyInstance) {
     const finalBody = parsed.data.body.trim();
     const edited = finalBody !== draft.body.trim() || finalSubject !== defaultSubject(draft.subject, context.originalSubject);
 
-    const claimed = await claimDraftForSend(id, finalSubject, finalBody);
+    const claimed = await claimDraftForSend(id);
     if (!claimed) return reply.code(409).send({ error: "draft was already handled" });
 
     try {
@@ -374,7 +444,15 @@ export async function registerDashboard(app: FastifyInstance) {
     }
 
     await markDraftSent(id);
-    await recordApproval({ draftId: id, action: edited ? "edited" : "approved", notes: edited ? "edited on dashboard before send" : undefined });
+    // Bruno's original stays on the draft; the human's final version goes on the
+    // approval row (final_subject/final_body) — the edit diff feeds Phase C learning.
+    await recordApproval({
+      draftId: id,
+      action: edited ? "edited" : "approved",
+      notes: edited ? "edited on dashboard before send" : undefined,
+      finalSubject,
+      finalBody
+    });
     return reply.send({ ok: true });
   });
 
