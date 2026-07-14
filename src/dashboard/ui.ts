@@ -530,7 +530,11 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   }
   .suggestion:hover { border-color: var(--accent); color: var(--ink); background: var(--surface-2); }
 
-  .msg { max-width: 72%; padding: 11px 15px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+  .chat-scroll { overscroll-behavior: contain; }
+  .msg { max-width: 72%; padding: 11px 15px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; animation: msgIn 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
+  .msg-status { font-size: 12px; color: var(--muted); margin-left: 8px; }
+  .type-caret { display: inline-block; width: 7px; height: 14px; background: var(--accent); margin-left: 2px; vertical-align: -2px; border-radius: 1px; animation: blink 1s infinite; }
   .msg-user { align-self: flex-end; background: var(--brand-blue); color: #fff; border-bottom-right-radius: 4px; }
   .msg-agent {
     align-self: flex-start; background: var(--surface); border: 1px solid var(--hairline);
@@ -671,6 +675,12 @@ ${renderDock(ctx)}
   }
 
   /* ——— Agent chat (full page and dock share this) ——— */
+  function nearBottom(scroll) {
+    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 140;
+  }
+  function scrollBottom(scroll, smooth) {
+    scroll.scrollTo({ top: scroll.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  }
   function appendMsg(scroll, cls, text, tag, tools) {
     var el = document.createElement("div");
     el.className = "msg " + cls;
@@ -680,7 +690,10 @@ ${renderDock(ctx)}
       t.textContent = tag;
       el.appendChild(t);
     }
-    el.appendChild(document.createTextNode(text));
+    var body = document.createElement("span");
+    body.className = "msg-body";
+    body.textContent = text;
+    el.appendChild(body);
     if (tools && tools.length) {
       var tl = document.createElement("div");
       tl.className = "msg-tools";
@@ -690,9 +703,33 @@ ${renderDock(ctx)}
     var empty = scroll.querySelector(".chat-empty, .chat-welcome");
     if (empty) empty.remove();
     scroll.appendChild(el);
-    scroll.scrollTop = scroll.scrollHeight;
     return el;
   }
+  /* Typewriter reveal: paces the whole answer to ~2s, follows with the scroll
+     only while the reader is already at the bottom. */
+  function typeInto(el, scroll, text, tools) {
+    var body = el.querySelector(".msg-body");
+    var caret = document.createElement("span");
+    caret.className = "type-caret";
+    el.appendChild(caret);
+    var i = 0;
+    var step = Math.max(2, Math.ceil(text.length / 110));
+    (function tick() {
+      i = Math.min(text.length, i + step);
+      body.textContent = text.slice(0, i);
+      if (nearBottom(scroll)) scrollBottom(scroll, false);
+      if (i < text.length) { setTimeout(tick, 16); return; }
+      caret.remove();
+      if (tools && tools.length) {
+        var tl = document.createElement("div");
+        tl.className = "msg-tools";
+        tl.textContent = "↳ checked: " + tools.join(", ");
+        el.appendChild(tl);
+        if (nearBottom(scroll)) scrollBottom(scroll, true);
+      }
+    })();
+  }
+  var THINKING = ["thinking…", "checking live data…", "pulling the numbers…", "writing it up…"];
 
   /* ——— Slash commands ——— */
   var COMMANDS = [
@@ -721,7 +758,13 @@ ${renderDock(ctx)}
     var textarea = form.querySelector("textarea");
     var chatId = chat.getAttribute("data-chat-id") || "console";
     var palette = form.parentElement ? form.parentElement.querySelector(".palette") : null;
-    scroll.scrollTop = scroll.scrollHeight;
+    scrollBottom(scroll, false);
+
+    function autogrow() {
+      textarea.style.height = "auto";
+      textarea.style.height = Math.min(textarea.scrollHeight, 140) + "px";
+    }
+    textarea.addEventListener("input", autogrow);
 
     function matchedCommands() {
       var value = textarea.value.trim().toLowerCase();
@@ -769,10 +812,23 @@ ${renderDock(ctx)}
       if (!message || chatBusy) return;
       chatBusy = true;
       textarea.value = "";
+      autogrow();
       form.querySelector("button").disabled = true;
       appendMsg(scroll, "msg-user", message);
+      scrollBottom(scroll, true);
+
       var pending = appendMsg(scroll, "msg-agent msg-pending", "", "bruno");
-      pending.insertAdjacentHTML("beforeend", '<span class="dots"><span>●</span> <span>●</span> <span>●</span></span>');
+      pending.insertAdjacentHTML(
+        "beforeend",
+        '<span class="dots"><span>●</span> <span>●</span> <span>●</span></span><span class="msg-status">' + THINKING[0] + "</span>"
+      );
+      scrollBottom(scroll, true);
+      var thinkStep = 0;
+      var thinkTimer = setInterval(function () {
+        thinkStep = Math.min(THINKING.length - 1, thinkStep + 1);
+        var status = pending.querySelector(".msg-status");
+        if (status) status.textContent = THINKING[thinkStep];
+      }, 2200);
 
       fetch("/dashboard/api/chat", {
         method: "POST",
@@ -781,16 +837,22 @@ ${renderDock(ctx)}
       })
         .then(function (response) { return response.json().then(function (body) { return { ok: response.ok, body: body }; }); })
         .then(function (result) {
+          clearInterval(thinkTimer);
           pending.remove();
           if (result.ok) {
-            appendMsg(scroll, "msg-agent", result.body.text, "bruno", result.body.toolCalls);
+            var el = appendMsg(scroll, "msg-agent", "", "bruno");
+            if (nearBottom(scroll)) scrollBottom(scroll, false);
+            typeInto(el, scroll, result.body.text, result.body.toolCalls);
           } else {
             appendMsg(scroll, "msg-agent", (result.body && result.body.error) || "Something went wrong — try again.", "bruno");
+            scrollBottom(scroll, true);
           }
         })
         .catch(function () {
+          clearInterval(thinkTimer);
           pending.remove();
           appendMsg(scroll, "msg-agent", "Network error — try again.", "bruno");
+          scrollBottom(scroll, true);
         })
         .finally(function () {
           chatBusy = false;
