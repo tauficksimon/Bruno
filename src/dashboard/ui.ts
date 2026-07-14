@@ -174,6 +174,10 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
     display: flex;
     min-height: 100vh;
   }
+  /* Chat page: lock to the viewport so the conversation scrolls inside its own
+     area and the composer stays pinned instead of the page growing. */
+  body.chat-page { height: 100vh; overflow: hidden; }
+  body.chat-page .content { min-height: 0; }
   h1, h2, h3, .brand { font-family: var(--display); }
   .mono { font-family: var(--mono); font-size: 12px; }
   .muted { color: var(--muted); }
@@ -239,7 +243,7 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   }
   .topbar h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; margin: 0; margin-right: auto; }
   main { padding: 18px 26px 60px; max-width: 1012px; width: 100%; margin: 0 auto; }
-  main.main-chat { flex: 1; display: flex; flex-direction: column; padding-bottom: 24px; max-width: 880px; }
+  main.main-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 24px; max-width: 880px; }
 
   .reveal { animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.3, 1) both; animation-delay: calc(var(--d, 0) * 90ms); }
   @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
@@ -509,7 +513,7 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   }
 </style>
 </head>
-<body data-autorefresh="${ctx.autoRefresh ? "1" : "0"}">
+<body data-autorefresh="${ctx.autoRefresh ? "1" : "0"}"${ctx.active === "bruno" ? ' class="chat-page"' : ""}>
 <aside class="side">
   <div class="brand">Bruno<small>Kinta <em>·</em> outbound</small></div>
   <nav class="nav">
