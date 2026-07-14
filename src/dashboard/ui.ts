@@ -330,7 +330,8 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   }
   .topbar h1 { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; margin: 0; margin-right: auto; color: #fff; }
   main { padding: 18px 26px 60px; max-width: 1012px; width: 100%; margin: 0 auto; }
-  main.main-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 24px; max-width: 880px; }
+  main.main-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 24px; max-width: none; }
+  body.chat-page .topbar { max-width: none; }
 
   .reveal { animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.3, 1) both; animation-delay: calc(var(--d, 0) * 90ms); }
   @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
@@ -441,11 +442,26 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
     background: var(--surface-2); border: 1px solid var(--hairline-2); border-radius: 999px; padding: 3px 9px;
   }
 
-  /* ——— Briefing (home) ——— */
-  .briefing {
-    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
-    padding: 14px 18px 12px; margin-bottom: 16px;
+  /* ——— Today (briefing dropdown on the chat page) ——— */
+  .today-row { display: flex; justify-content: flex-end; margin-bottom: 8px; position: relative; }
+  .today-btn {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+    background: var(--surface); border: 1px solid var(--hairline-2); border-radius: 999px;
+    color: var(--ink-2); font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 6px 14px;
   }
+  .today-btn:hover { border-color: var(--accent); color: var(--ink); }
+  .today-btn .t-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .today-btn .t-dot.hot { background: var(--cta); animation: pulse 2.4s ease-in-out infinite; }
+  .today-panel {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 35;
+    width: min(600px, 92vw);
+    background: var(--surface); border: 1px solid var(--hairline-2); border-radius: 12px;
+    padding: 14px 18px 12px; box-shadow: 0 16px 50px rgba(0,0,0,0.55);
+  }
+  .today-panel[hidden] { display: none; }
+
+  /* ——— Briefing rows ——— */
   .briefing-title { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
   .briefing-row { display: flex; gap: 10px; align-items: baseline; font-size: 13px; padding: 4px 0; overflow-wrap: anywhere; }
   .briefing-row a { color: var(--accent); text-decoration: none; font-weight: 600; white-space: nowrap; }
@@ -531,7 +547,7 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   .suggestion:hover { border-color: var(--accent); color: var(--ink); background: var(--surface-2); }
 
   .chat-scroll { overscroll-behavior: contain; }
-  .msg { max-width: 72%; padding: 11px 15px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; animation: msgIn 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+  .msg { max-width: min(72%, 720px); padding: 11px 15px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; animation: msgIn 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
   @keyframes msgIn { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
   .msg-status { font-size: 12px; color: var(--muted); margin-left: 8px; }
   .type-caret { display: inline-block; width: 7px; height: 14px; background: var(--accent); margin-left: 2px; vertical-align: -2px; border-radius: 1px; animation: blink 1s infinite; }
@@ -657,7 +673,6 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   <div class="topbar">
     <h1>${escapeHtml(ctx.title)}</h1>
     ${failedChip}
-    ${agentChip}
   </div>
   ${contentHtml}
 </div>
@@ -869,6 +884,19 @@ ${renderDock(ctx)}
       form.requestSubmit();
     });
   });
+
+  /* ——— Today dropdown ——— */
+  var todayBtn = document.getElementById("today-btn");
+  var todayPanel = document.getElementById("today-panel");
+  if (todayBtn && todayPanel) {
+    todayBtn.addEventListener("click", function (event) {
+      event.stopPropagation();
+      todayPanel.hidden = !todayPanel.hidden;
+    });
+    document.addEventListener("click", function (event) {
+      if (!todayPanel.hidden && !todayPanel.contains(event.target)) todayPanel.hidden = true;
+    });
+  }
 
   var toggle = document.getElementById("dock-toggle");
   var dock = document.getElementById("dock");

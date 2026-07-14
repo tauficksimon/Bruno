@@ -168,19 +168,28 @@ export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel, chat
         <button class="suggestion">How many leads are loaded?</button>
       </div>
     </div>`;
-  const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
   const pendingChip =
     briefing.pendingCount > 0
       ? `<a href="/dashboard/inbox">${briefing.pendingCount} waiting → Inbox</a>`
       : `<span>kinta · outbound</span>`;
+  const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const needsYou = briefing.pendingCount + briefing.needsReadCount;
+  const todayLabel =
+    needsYou > 0 ? `${needsYou} need${needsYou === 1 ? "s" : ""} you` : briefing.failedJobs > 0 ? "check system" : "all clear";
   return `
   <main class="main-chat reveal">
-    <section class="briefing">
-      <div class="briefing-title mono">Today · ${dateLabel}</div>
-      ${briefingRows(briefing)
-        .map((row) => `<div class="briefing-row">${row}</div>`)
-        .join("\n")}
-    </section>
+    <div class="today-row">
+      <button class="today-btn" id="today-btn" type="button">
+        <span class="t-dot${needsYou > 0 || briefing.failedJobs > 0 ? " hot" : ""}"></span>
+        Today · ${escapeHtml(todayLabel)} ▾
+      </button>
+      <div class="today-panel" id="today-panel" hidden>
+        <div class="briefing-title mono">Today · ${dateLabel}</div>
+        ${briefingRows(briefing)
+          .map((row) => `<div class="briefing-row">${row}</div>`)
+          .join("\n")}
+      </div>
+    </div>
     <div class="chat" data-chat data-chat-id="${escapeHtml(chatId)}">
       <div class="chat-scroll" data-chat-scroll>
         ${renderChatTurns(turns, welcome)}
