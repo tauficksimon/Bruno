@@ -2,7 +2,7 @@
 // these functions only turn them into HTML (everything dynamic escaped).
 
 import { leadStatusLabel } from "../integrations/instantly.js";
-import { escapeHtml, intentBadge, relativeTime, renderChatTurns, whoLabel, type ChatTurn } from "./ui.js";
+import { escapeHtml, intentBadge, relativeTime, renderChatTurns, whoLabel, SEND_ICON, type ChatTurn } from "./ui.js";
 
 const INTENT_ORDER = ["positive", "question", "objection", "not_now", "negative", "unsubscribe", "unclear"];
 
@@ -158,8 +158,9 @@ export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel) {
   const welcome = `
     <div class="chat-welcome">
       <div class="bruno-mark">✳</div>
-      <h2>Ask Bruno</h2>
-      <p>He runs your outbound — watches the campaign, reads every reply, drafts the responses — and answers with live numbers, not guesses.</p>
+      <h2>Bruno</h2>
+      <p>Runs your outbound — watches the campaign, reads every reply, drafts the responses.</p>
+      <p class="hint muted">Type a message below — he answers with live numbers, not guesses.</p>
       <div class="suggestions">
         <button class="suggestion">How is the campaign doing?</button>
         <button class="suggestion">What's our inbox health?</button>
@@ -180,10 +181,18 @@ export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel) {
       <div class="chat-scroll" data-chat-scroll>
         ${renderChatTurns(turns, welcome)}
       </div>
-      <form class="composer" data-chat-form>
-        <textarea name="message" rows="2" placeholder="Ask Bruno… (Enter to send, Shift+Enter for a new line)" required></textarea>
-        <button class="btn btn-send" type="submit">Send</button>
-      </form>
+      <div class="composer-wrap">
+        <form class="composer" data-chat-form>
+          <textarea name="message" rows="2" placeholder="Message Bruno… (Enter to send, Shift+Enter for a new line)" required></textarea>
+          <button class="btn btn-send" type="submit" aria-label="Send">${SEND_ICON}</button>
+        </form>
+        <div class="composer-foot">
+          <span><span class="live-dot${briefing.agentPaused ? " paused" : ""}"></span>${briefing.agentPaused ? "paused" : "running"}${
+            briefing.lastPollAgo ? ` · replies checked ${briefing.lastPollAgo}` : ""
+          }</span>
+          <span>kinta · outbound</span>
+        </div>
+      </div>
     </div>
   </main>`;
 }
