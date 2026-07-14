@@ -1,9 +1,95 @@
 // Page bodies for the console shell. Data models are assembled in routes.ts;
 // these functions only turn them into HTML (everything dynamic escaped).
 
+import { leadStatusLabel } from "../integrations/instantly.js";
 import { escapeHtml, intentBadge, relativeTime, renderChatTurns, whoLabel, type ChatTurn } from "./ui.js";
 
 const INTENT_ORDER = ["positive", "question", "objection", "not_now", "negative", "unsubscribe", "unclear"];
+
+// ————— Live Instantly views (shared) —————
+
+export interface EngagementView {
+  openCount: number;
+  clickCount: number;
+  replyCount: number;
+  status?: number;
+  lastContactAt?: string;
+  lastStepId?: string;
+  lastStepFrom?: string;
+}
+
+export interface PulseView {
+  campaignName: string;
+  statusLabel: string;
+  dailyLimit?: number;
+  openTracking?: boolean;
+  leadCount?: number;
+  leadCountCapped?: boolean;
+  sent: number;
+  opensUnique: number;
+  clicks: number;
+  repliesUnique: number;
+  bounces: number;
+  unsubscribes: number;
+  inboxes: Array<{ email: string; todaySent?: number; last7Sent: number; landingRate: number }>;
+}
+
+function ratePercent(numerator: number, denominator: number) {
+  if (denominator <= 0) return undefined;
+  return `${((numerator / denominator) * 100).toFixed(1)}%`;
+}
+
+/** "email 2 · variant B" from Instantly's stepID format "0_2_1". */
+function stepLabel(stepId?: string) {
+  if (!stepId) return undefined;
+  const parts = stepId.split("_");
+  if (parts.length < 2) return undefined;
+  const step = parts[1];
+  const variant = parts.length > 2 ? Number(parts[2]) : undefined;
+  const variantLabel = variant !== undefined && !Number.isNaN(variant) ? ` · variant ${String.fromCharCode(65 + variant)}` : "";
+  return `email ${step}${variantLabel}`;
+}
+
+export function renderPulseStrip(pulse: PulseView) {
+  const openRate = ratePercent(pulse.opensUnique, pulse.sent);
+  const replyRate = ratePercent(pulse.repliesUnique, pulse.sent);
+  const items: string[] = [
+    `<span class="pulse-item">campaign <strong>${escapeHtml(pulse.statusLabel)}</strong></span>`,
+    `<span class="pulse-item"><strong>${pulse.sent}</strong> sent</span>`,
+    pulse.openTracking === false
+      ? `<span class="pulse-item pulse-dim">opens n/a (tracking off)</span>`
+      : `<span class="pulse-item"><strong>${pulse.opensUnique}</strong> opens${openRate ? ` (${openRate})` : ""}</span>`,
+    `<span class="pulse-item"><strong>${pulse.clicks}</strong> clicks</span>`,
+    `<span class="pulse-item"><strong>${pulse.repliesUnique}</strong> replies${replyRate ? ` (${replyRate})` : ""}</span>`,
+    `<span class="pulse-item"><strong>${pulse.bounces}</strong> bounced</span>`
+  ];
+  if (pulse.leadCount !== undefined) {
+    items.push(`<span class="pulse-item"><strong>${pulse.leadCount}${pulse.leadCountCapped ? "+" : ""}</strong> leads</span>`);
+  }
+  if (pulse.dailyLimit !== undefined) {
+    items.push(`<span class="pulse-item">limit <strong>${pulse.dailyLimit}</strong>/day</span>`);
+  }
+  return `
+  <section class="pulse">
+    <span class="pulse-label">live · instantly</span>
+    ${items.join("\n")}
+  </section>`;
+}
+
+function engagementChips(engagement: EngagementView | undefined, now: Date) {
+  if (!engagement) return "";
+  const chips: string[] = [];
+  if (engagement.openCount > 0) chips.push(`opened ${engagement.openCount}×`);
+  if (engagement.clickCount > 0) chips.push(`clicked ${engagement.clickCount}×`);
+  const step = stepLabel(engagement.lastStepId);
+  if (step) chips.push(`last got ${step}`);
+  if (engagement.lastStepFrom) chips.push(`from ${engagement.lastStepFrom}`);
+  if (engagement.lastContactAt) chips.push(`last touch ${relativeTime(engagement.lastContactAt, now)}`);
+  const status = leadStatusLabel(engagement.status);
+  if (status) chips.push(status);
+  if (chips.length === 0) return "";
+  return `<div class="eng">${chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}</div>`;
+}
 
 // ————— Bruno (home: briefing + chat) —————
 
@@ -16,6 +102,9 @@ export interface BriefingModel {
   sendsYesterday?: number;
   failedJobs: number;
   lastPollAgo?: string;
+  campaignStatus?: string;
+  campaignSent?: number;
+  dailyLimit?: number;
 }
 
 function briefingRows(b: BriefingModel) {
@@ -46,6 +135,13 @@ function briefingRows(b: BriefingModel) {
   }
   if (b.sendsYesterday !== undefined) {
     rows.push(`<span class="b-flag">sent</span> ${b.sendsYesterday} email${b.sendsYesterday === 1 ? "" : "s"} went out yesterday. <a href="/dashboard/campaign">Campaign →</a>`);
+  }
+  if (b.campaignStatus) {
+    rows.push(
+      `<span class="b-flag">camp</span> Campaign is <strong>${escapeHtml(b.campaignStatus)}</strong>${
+        b.campaignSent !== undefined ? ` — ${b.campaignSent} sent lifetime` : ""
+      }${b.dailyLimit !== undefined ? `, limit ${b.dailyLimit}/day` : ""}. <a href="/dashboard/campaign">Campaign →</a>`
+    );
   }
   if (b.failedJobs > 0) {
     rows.push(`<span class="b-flag b-warn">check</span> ${b.failedJobs} background task${b.failedJobs === 1 ? "" : "s"} failed. <a href="/dashboard/system">System →</a>`);
@@ -108,6 +204,7 @@ export interface DraftCardModel {
   createdAt: string;
   sendFrom?: string;
   canSend: boolean;
+  engagement?: EngagementView;
 }
 
 export interface ReplyFeedModel {
@@ -117,6 +214,7 @@ export interface ReplyFeedModel {
   reason: string;
   createdAt: string;
   prospectText?: string;
+  engagement?: EngagementView;
 }
 
 export interface ActivityModel {
@@ -146,6 +244,7 @@ function renderDraftCard(draft: DraftCardModel, now: Date) {
         <span class="mono muted">${relativeTime(draft.createdAt, now)}</span>
       </div>
     </header>
+    ${engagementChips(draft.engagement, now)}
     ${
       draft.prospectText
         ? `<div class="prospect"><div class="section-label">They wrote</div><blockquote>${escapeHtml(draft.prospectText)}</blockquote></div>`
@@ -189,7 +288,8 @@ export function renderInboxPage(
   needsRead: ReplyFeedModel[],
   handled: ReplyFeedModel[],
   activity: ActivityModel[],
-  now: Date
+  now: Date,
+  pulse?: PulseView
 ) {
   const cards = drafts.map((draft) => renderDraftCard(draft, now)).join("\n");
   const empty = `
@@ -213,6 +313,7 @@ export function renderInboxPage(
               ${row.email ? `<div class="mono muted">${escapeHtml(row.email)}</div>` : ""}</div>
               <div class="card-meta">${intentBadge(row.intent)}<span class="mono muted">${relativeTime(row.createdAt, now)}</span></div>
             </header>
+            ${engagementChips(row.engagement, now)}
             ${row.prospectText ? `<div class="prospect"><div class="section-label">They wrote</div><blockquote>${escapeHtml(row.prospectText)}</blockquote></div>` : ""}
             <div class="agent-note"><span class="section-label">Bruno's read</span> ${escapeHtml(row.reason)}</div>
           </article>`
@@ -252,6 +353,7 @@ export function renderInboxPage(
 
   return `
   <main class="reveal">
+    ${pulse ? renderPulseStrip(pulse) : ""}
     <h2>Waiting on you <span class="count mono" id="pending-count">${drafts.length}</span></h2>
     ${drafts.length > 0 ? cards : empty}
     ${needsReadHtml}
@@ -270,6 +372,7 @@ export interface CampaignModel {
   bounces7d: number;
   positive7d: number;
   daily: Array<{ date: string; sends: number; replies: number; bounces: number }>;
+  pulse?: PulseView;
 }
 
 function formatPercent(numerator: number, denominator: number) {
@@ -277,10 +380,72 @@ function formatPercent(numerator: number, denominator: number) {
   return `${((numerator / denominator) * 100).toFixed(1)}%`;
 }
 
+function renderLiveTiles(pulse: PulseView) {
+  const replyRate = ratePercent(pulse.repliesUnique, pulse.sent) ?? "—";
+  const openValue = pulse.openTracking === false ? "off" : String(pulse.opensUnique);
+  const openSub =
+    pulse.openTracking === false
+      ? "open tracking disabled (plain-text)"
+      : ratePercent(pulse.opensUnique, pulse.sent)
+        ? `${ratePercent(pulse.opensUnique, pulse.sent)} open rate`
+        : "no opens recorded yet";
+  const replySub =
+    pulse.sent < 300
+      ? "too few sends to judge vs the 3% rule"
+      : `${replyRate} vs the 3% golden rule`;
+  return `
+    <section class="kpis">
+      <div class="tile">
+        <div class="tile-label">Sent · lifetime</div>
+        <div class="tile-value">${pulse.sent.toLocaleString("en-US")}</div>
+        <div class="tile-sub">${pulse.leadCount !== undefined ? `${pulse.leadCount}${pulse.leadCountCapped ? "+" : ""} leads loaded` : "live from Instantly"}</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">Opens</div>
+        <div class="tile-value">${openValue}</div>
+        <div class="tile-sub">${openSub}</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">Replies</div>
+        <div class="tile-value">${pulse.repliesUnique}</div>
+        <div class="tile-sub">${replySub}</div>
+      </div>
+      <div class="tile${pulse.bounces > 0 && pulse.sent > 0 && pulse.bounces / pulse.sent > 0.03 ? " tile-bad" : ""}">
+        <div class="tile-label">Bounces</div>
+        <div class="tile-value">${pulse.bounces}</div>
+        <div class="tile-sub">${pulse.clicks} link clicks · ${pulse.unsubscribes} unsubscribed</div>
+      </div>
+    </section>`;
+}
+
+function renderInboxHealthTable(pulse: PulseView) {
+  if (pulse.inboxes.length === 0) return "";
+  const rows = pulse.inboxes
+    .map(
+      (inbox) => `
+      <tr>
+        <td class="mono">${escapeHtml(inbox.email)}</td>
+        <td class="mono num">${inbox.todaySent ?? "—"}</td>
+        <td class="mono num">${inbox.last7Sent}</td>
+        <td class="mono num">${Math.round(inbox.landingRate * 100)}%</td>
+        <td>${inbox.landingRate >= 0.9 ? `<span class="ok-text">healthy</span>` : `<span class="warn-text">watch — landing below 90%</span>`}</td>
+      </tr>`
+    )
+    .join("\n");
+  return `
+    <h2>Sending inboxes</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Inbox</th><th class="num">Warmup today</th><th class="num">7d warmup</th><th class="num">Inbox landing</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
 export function renderCampaignPage(m: CampaignModel) {
   const table =
     m.daily.length === 0
-      ? `<p class="muted">No numbers yet — this fills in nightly once sending starts.</p>`
+      ? `<p class="muted">No daily history yet — this fills in nightly once sending starts.</p>`
       : `
       <div class="table-scroll">
         <table>
@@ -301,8 +466,7 @@ export function renderCampaignPage(m: CampaignModel) {
         </table>
       </div>`;
 
-  return `
-  <main class="reveal">
+  const fallbackTiles = `
     <section class="kpis">
       <div class="tile">
         <div class="tile-label">Sends · 7d</div>
@@ -324,7 +488,13 @@ export function renderCampaignPage(m: CampaignModel) {
         <div class="tile-value">${formatPercent(m.bounces7d, m.sends7d)}</div>
         <div class="tile-sub">keep under 3%</div>
       </div>
-    </section>
+    </section>`;
+
+  return `
+  <main class="reveal">
+    ${m.pulse ? renderPulseStrip(m.pulse) : ""}
+    ${m.pulse ? renderLiveTiles(m.pulse) : fallbackTiles}
+    ${m.pulse ? renderInboxHealthTable(m.pulse) : ""}
     <h2>Last 7 days</h2>
     ${table}
   </main>`;
@@ -341,6 +511,8 @@ export interface SystemModel {
   lastPollAgo?: string;
   lastPollStale: boolean;
   groups: Array<{ name: string; count: number; last_failed_at: string; latest_error: string | null }>;
+  instantlyOk: boolean;
+  claudeOk: boolean;
 }
 
 /** Translate the most common raw errors into owner language. */
@@ -361,6 +533,12 @@ function plainError(error: string | null) {
 export function renderSystemPage(s: SystemModel, now: Date) {
   const problems: string[] = [];
   if (s.agentPaused) problems.push("Bruno is <strong>paused</strong> — nothing is being processed until you resume him (sidebar button).");
+  if (!s.instantlyOk) {
+    problems.push("Bruno can't reach Instantly right now — live campaign numbers and engagement are unavailable.");
+  }
+  if (!s.claudeOk) {
+    problems.push("The Claude AI key is missing — Bruno can't classify replies, draft responses, or chat until it's added.");
+  }
   if (s.lastPollStale) {
     problems.push(`Bruno hasn't been able to check for replies recently${s.lastPollAgo ? ` (last success ${s.lastPollAgo})` : ""}.`);
   }
@@ -377,7 +555,8 @@ export function renderSystemPage(s: SystemModel, now: Date) {
       ? `<div class="status-hero status-ok">
            <div class="status-mark">✓</div>
            <div><strong>Everything is running normally.</strong><br/>
-           <span class="muted">Bruno checks for replies every 5 minutes${s.lastPollAgo ? ` — last check ${s.lastPollAgo}` : ""}. Silence here means healthy.</span></div>
+           <span class="muted">Bruno checks for replies every 5 minutes${s.lastPollAgo ? ` — last check ${s.lastPollAgo}` : ""}. Silence here means healthy.</span><br/>
+           <span class="mono muted">connections: instantly ✓ · claude ✓</span></div>
          </div>`
       : `<div class="status-hero status-bad">
            <div class="status-mark">!</div>

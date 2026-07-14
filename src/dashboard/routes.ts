@@ -25,8 +25,19 @@ import {
   getQueueSummary,
   listRecentDailyMetrics
 } from "../db/metrics.js";
+import { cachedFetch } from "../db/cache.js";
 import { clearFailedJobs, getFailedJobGroups, retryLatestFailedJob } from "../db/ops.js";
-import { sendReplyEmail } from "../integrations/instantly.js";
+import { hasClaudeKey } from "../integrations/claude.js";
+import {
+  countCampaignLeads,
+  getCampaignAnalyticsOverview,
+  getInstantlyCampaign,
+  getLeadEngagement,
+  getWarmupAnalytics,
+  listInstantlyCampaigns,
+  sendReplyEmail,
+  type InstantlyLeadEngagement
+} from "../integrations/instantly.js";
 import {
   renderBrunoPage,
   renderCampaignPage,
@@ -227,6 +238,108 @@ function agoLabel(minutes: number | undefined) {
 const HOT_INTENTS = ["positive", "question", "objection"];
 const HANDLED_INTENTS = ["not_now", "negative", "unsubscribe"];
 
+// ————— Live Instantly layer (cached, failure-tolerant) —————
+
+export interface CampaignPulse {
+  campaignId: string;
+  campaignName: string;
+  statusLabel: string;
+  dailyLimit?: number;
+  openTracking?: boolean;
+  leadCount?: number;
+  leadCountCapped?: boolean;
+  sent: number;
+  opensUnique: number;
+  clicks: number;
+  repliesUnique: number;
+  bounces: number;
+  unsubscribes: number;
+  inboxes: Array<{ email: string; todaySent?: number; last7Sent: number; landingRate: number }>;
+}
+
+function campaignStatusLabel(status?: number) {
+  switch (status) {
+    case 0: return "draft";
+    case 1: return "active";
+    case 2: return "paused";
+    case 3: return "completed";
+    case 4: return "running";
+    default: return "unknown";
+  }
+}
+
+/**
+ * One shared snapshot of the live Instantly state, cached 5 minutes. Returns
+ * null when Instantly is unreachable — pages render without the live layer
+ * instead of failing.
+ */
+async function loadCampaignPulse(): Promise<CampaignPulse | null> {
+  try {
+    return await cachedFetch<CampaignPulse | null>("instantly:pulse", 300, async () => {
+      const campaigns = await listInstantlyCampaigns({ limit: 10 });
+      const campaign = campaigns[0];
+      if (!campaign) return null;
+
+      const [detail, analytics, leadCount, warmup] = await Promise.allSettled([
+        getInstantlyCampaign(campaign.id),
+        getCampaignAnalyticsOverview(campaign.id),
+        countCampaignLeads({ campaignId: campaign.id, maxPages: 3 }),
+        (async () => {
+          const emails = campaign.email_list ?? [];
+          return emails.length > 0 ? getWarmupAnalytics(emails) : [];
+        })()
+      ]);
+
+      const detailRecord = detail.status === "fulfilled" ? (detail.value as unknown as Record<string, unknown>) : {};
+      const a = analytics.status === "fulfilled" ? analytics.value : undefined;
+
+      return {
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        statusLabel: campaignStatusLabel(campaign.status),
+        dailyLimit: typeof detailRecord.daily_limit === "number" ? detailRecord.daily_limit : undefined,
+        openTracking: typeof detailRecord.open_tracking === "boolean" ? detailRecord.open_tracking : undefined,
+        leadCount: leadCount.status === "fulfilled" ? leadCount.value.count : undefined,
+        leadCountCapped: leadCount.status === "fulfilled" ? leadCount.value.capped : undefined,
+        sent: a?.emails_sent_count ?? 0,
+        opensUnique: a?.open_count_unique ?? 0,
+        clicks: a?.link_click_count ?? 0,
+        repliesUnique: a?.reply_count_unique ?? 0,
+        bounces: a?.bounced_count ?? 0,
+        unsubscribes: a?.unsubscribed_count ?? 0,
+        inboxes:
+          warmup.status === "fulfilled"
+            ? warmup.value.map((w) => ({
+                email: w.email,
+                todaySent: w.today?.sent,
+                last7Sent: w.last7DaysSent,
+                landingRate: w.inboxLandingRate
+              }))
+            : []
+      };
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Per-lead engagement for the people shown in the Inbox (cached 15 min each). */
+async function loadEngagementMap(emails: Array<string | undefined>, campaignId?: string) {
+  const unique = [...new Set(emails.filter((e): e is string => Boolean(e)))].slice(0, 12);
+  const results = await Promise.allSettled(
+    unique.map((email) =>
+      cachedFetch<InstantlyLeadEngagement | null>(`lead-eng:${email.toLowerCase()}`, 900, async () => {
+        return (await getLeadEngagement({ email, campaignId })) ?? null;
+      })
+    )
+  );
+  const map = new Map<string, InstantlyLeadEngagement>();
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled" && result.value) map.set(unique[index].toLowerCase(), result.value);
+  });
+  return map;
+}
+
 function toFeedModel(row: { company_name: string | null; email: string | null; intent: string; reason: string; created_at: string; raw_thread: string | null }): ReplyFeedModel {
   return {
     companyName: row.company_name ?? undefined,
@@ -252,13 +365,14 @@ export async function registerDashboard(app: FastifyInstance) {
   // Bruno — briefing + chat home
   app.get("/dashboard", async (request, reply) => {
     if (!authorizePage(request, reply, "/dashboard")) return reply;
-    const [shell, turns, drafts, replies24h, dailyRows, lastPollAt] = await Promise.all([
+    const [shell, turns, drafts, replies24h, dailyRows, lastPollAt, pulse] = await Promise.all([
       loadShellContext("bruno", "Bruno", false),
       loadConversation(WEB_CHAT_THREAD_KEY, 40),
       listPendingDrafts(20),
       getRecentReplySummary(24),
       listRecentDailyMetrics(2),
-      getConfigValue<string>("last_poll_success_at")
+      getConfigValue<string>("last_poll_success_at"),
+      loadCampaignPulse()
     ]);
 
     const hottest = drafts
@@ -283,7 +397,10 @@ export async function registerDashboard(app: FastifyInstance) {
           replies24h: replies24h.filter((r) => r.intent !== "unclear").map((r) => ({ intent: r.intent, count: r.count })),
           sendsYesterday: dailyRows.length > 0 ? sendsYesterday : undefined,
           failedJobs: shell.failedJobs,
-          lastPollAgo: agoLabel(minutesSince(lastPollAt))
+          lastPollAgo: agoLabel(minutesSince(lastPollAt)),
+          campaignStatus: pulse?.statusLabel,
+          campaignSent: pulse?.sent,
+          dailyLimit: pulse?.dailyLimit
         })
       )
     );
@@ -292,11 +409,12 @@ export async function registerDashboard(app: FastifyInstance) {
   // Inbox — who replied, hottest first
   app.get("/dashboard/inbox", async (request, reply) => {
     if (!authorizePage(request, reply, "/dashboard/inbox")) return reply;
-    const [shell, drafts, feed, activity] = await Promise.all([
+    const [shell, drafts, feed, activity, pulse] = await Promise.all([
       loadShellContext("inbox", "Inbox", true),
       listPendingDrafts(20),
       listRecentClassifications(40),
-      listRecentApprovals(12)
+      listRecentApprovals(12),
+      loadCampaignPulse()
     ]);
 
     const cards = drafts
@@ -306,6 +424,18 @@ export async function registerDashboard(app: FastifyInstance) {
       );
     const needsRead = feed.filter((row) => row.intent === "unclear" && row.draft_status === null).slice(0, 10).map(toFeedModel);
     const handled = feed.filter((row) => HANDLED_INTENTS.includes(row.intent)).slice(0, 15).map(toFeedModel);
+
+    // Enrich the actionable people with their live Instantly engagement.
+    const engagement = await loadEngagementMap(
+      [...cards.map((c) => c.email), ...needsRead.map((r) => r.email)],
+      pulse?.campaignId
+    );
+    for (const card of cards) {
+      if (card.email) card.engagement = engagement.get(card.email.toLowerCase());
+    }
+    for (const row of needsRead) {
+      if (row.email) row.engagement = engagement.get(row.email.toLowerCase());
+    }
     const log = activity.map((row) => ({
       action: row.action,
       companyName: row.company_name ?? undefined,
@@ -315,15 +445,16 @@ export async function registerDashboard(app: FastifyInstance) {
 
     return reply
       .type("text/html")
-      .send(renderShell(shell, renderInboxPage(cards, needsRead, handled, log, shell.generatedAt)));
+      .send(renderShell(shell, renderInboxPage(cards, needsRead, handled, log, shell.generatedAt, pulse ?? undefined)));
   });
 
   // Campaign — is the machine sending, and is it working?
   app.get("/dashboard/campaign", async (request, reply) => {
     if (!authorizePage(request, reply, "/dashboard/campaign")) return reply;
-    const [shell, dailyRows] = await Promise.all([
+    const [shell, dailyRows, pulse] = await Promise.all([
       loadShellContext("campaign", "Campaign", true),
-      listRecentDailyMetrics(7)
+      listRecentDailyMetrics(7),
+      loadCampaignPulse()
     ]);
 
     // metrics_daily has one row per (date, campaign); collapse to one row per date.
@@ -346,7 +477,8 @@ export async function registerDashboard(app: FastifyInstance) {
           replies7d: daily.reduce((sum, day) => sum + day.replies, 0),
           bounces7d: daily.reduce((sum, day) => sum + day.bounces, 0),
           positive7d: daily.reduce((sum, day) => sum + day.positive, 0),
-          daily
+          daily,
+          pulse: pulse ?? undefined
         })
       )
     );
@@ -355,12 +487,13 @@ export async function registerDashboard(app: FastifyInstance) {
   // System — one honest sentence; tech behind a toggle
   app.get("/dashboard/system", async (request, reply) => {
     if (!authorizePage(request, reply, "/dashboard/system")) return reply;
-    const [shell, queue, oldestQueuedMinutes, groups, lastPollAt] = await Promise.all([
+    const [shell, queue, oldestQueuedMinutes, groups, lastPollAt, pulse] = await Promise.all([
       loadShellContext("system", "System", true),
       getQueueSummary(),
       getOldestQueuedJobAgeMinutes(),
       getFailedJobGroups(),
-      getConfigValue<string>("last_poll_success_at")
+      getConfigValue<string>("last_poll_success_at"),
+      loadCampaignPulse()
     ]);
     const pollAgeMinutes = minutesSince(lastPollAt);
     return reply.type("text/html").send(
@@ -375,7 +508,9 @@ export async function registerDashboard(app: FastifyInstance) {
             oldestQueuedMinutes,
             lastPollAgo: agoLabel(pollAgeMinutes),
             lastPollStale: !shell.agentPaused && pollAgeMinutes !== undefined && pollAgeMinutes > 15,
-            groups
+            groups,
+            instantlyOk: pulse !== null,
+            claudeOk: hasClaudeKey()
           },
           shell.generatedAt
         )

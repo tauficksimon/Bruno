@@ -435,6 +435,27 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
 
   footer.page-foot { text-align: center; color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 14px; }
 
+  /* ——— Live Instantly pulse ——— */
+  .pulse {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px;
+    background: var(--accent-deep); color: #fff; border-radius: 12px;
+    padding: 13px 18px; margin-bottom: 20px; box-shadow: 0 6px 20px rgba(13,14,107,0.18);
+  }
+  .pulse-label {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent-mid); margin-right: 4px;
+  }
+  .pulse-item { font-family: var(--mono); font-size: 12px; color: rgba(255,255,255,0.75); white-space: nowrap; }
+  .pulse-item strong { color: #fff; font-size: 15px; font-weight: 600; }
+  .pulse-dim { color: rgba(255,255,255,0.45); }
+
+  .eng { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .eng span {
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-2);
+    background: var(--paper); border: 1px solid var(--hairline); border-radius: 999px; padding: 3px 9px;
+  }
+  .ok-text { color: var(--ok); font-family: var(--mono); font-size: 11px; }
+
   /* ——— Briefing (home) ——— */
   .briefing {
     background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;

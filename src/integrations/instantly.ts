@@ -308,6 +308,53 @@ export async function countCampaignLeads(input: { campaignId: string; maxPages?:
   return { count, capped: Boolean(cursor) };
 }
 
+export interface InstantlyLeadEngagement {
+  email: string;
+  openCount: number;
+  clickCount: number;
+  replyCount: number;
+  /** 1 active · 2 paused · 3 finished · -1 bounced · -2 unsubscribed · -3 skipped */
+  status?: number;
+  lastContactAt?: string;
+  lastStepId?: string;
+  lastStepFrom?: string;
+}
+
+export function leadStatusLabel(status?: number) {
+  switch (status) {
+    case 1: return "in sequence";
+    case 2: return "sequence paused";
+    case 3: return "sequence finished";
+    case -1: return "bounced";
+    case -2: return "unsubscribed";
+    case -3: return "skipped";
+    default: return undefined;
+  }
+}
+
+/** Per-lead engagement counters straight off the Instantly lead record. */
+export async function getLeadEngagement(input: { email: string; campaignId?: string }): Promise<InstantlyLeadEngagement | undefined> {
+  const response = (await instantlyFetch("/api/v2/leads/list", {
+    method: "POST",
+    body: JSON.stringify({ search: input.email, campaign: input.campaignId, limit: 5 })
+  })) as { items?: unknown };
+  const items = Array.isArray(response.items) ? (response.items as Array<Record<string, unknown>>) : [];
+  const match = items.find((l) => typeof l.email === "string" && l.email.toLowerCase() === input.email.toLowerCase());
+  if (!match) return undefined;
+
+  const summary = (match.status_summary ?? {}) as { lastStep?: { from?: string; stepID?: string } };
+  return {
+    email: input.email,
+    openCount: typeof match.email_open_count === "number" ? match.email_open_count : 0,
+    clickCount: typeof match.email_click_count === "number" ? match.email_click_count : 0,
+    replyCount: typeof match.email_reply_count === "number" ? match.email_reply_count : 0,
+    status: typeof match.status === "number" ? match.status : undefined,
+    lastContactAt: typeof match.timestamp_last_contact === "string" ? match.timestamp_last_contact : undefined,
+    lastStepId: typeof summary.lastStep?.stepID === "string" ? summary.lastStep.stepID : undefined,
+    lastStepFrom: typeof summary.lastStep?.from === "string" ? summary.lastStep.from : undefined
+  };
+}
+
 export interface InstantlyWarmupDay {
   date: string;
   sent: number;
