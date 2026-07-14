@@ -59,20 +59,17 @@ function briefingRows(b: BriefingModel) {
 }
 
 export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel) {
-  const suggestions =
-    turns.length === 0
-      ? `<div class="suggestions">
-          <button class="suggestion">How is the campaign doing?</button>
-          <button class="suggestion">What's our inbox health?</button>
-          <button class="suggestion">Any replies this week?</button>
-          <button class="suggestion">How many leads are loaded?</button>
-        </div>`
-      : "";
   const welcome = `
     <div class="chat-welcome">
       <div class="bruno-mark">✳</div>
       <h2>Ask Bruno</h2>
       <p>He runs your outbound — watches the campaign, reads every reply, drafts the responses — and answers with live numbers, not guesses.</p>
+      <div class="suggestions">
+        <button class="suggestion">How is the campaign doing?</button>
+        <button class="suggestion">What's our inbox health?</button>
+        <button class="suggestion">Any replies this week?</button>
+        <button class="suggestion">How many leads are loaded?</button>
+      </div>
     </div>`;
   const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
   return `
@@ -87,7 +84,6 @@ export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel) {
       <div class="chat-scroll" data-chat-scroll>
         ${renderChatTurns(turns, welcome)}
       </div>
-      ${suggestions}
       <form class="composer" data-chat-form>
         <textarea name="message" rows="2" placeholder="Ask Bruno… (Enter to send, Shift+Enter for a new line)" required></textarea>
         <button class="btn btn-send" type="submit">Send</button>

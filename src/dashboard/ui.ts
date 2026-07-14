@@ -361,7 +361,8 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   .chat { display: flex; flex-direction: column; min-height: 0; flex: 1; }
   .chat-scroll { flex: 1; overflow-y: auto; padding: 4px 2px; display: flex; flex-direction: column; gap: 12px; }
   .chat-empty { text-align: center; padding: 26px 12px; font-size: 13px; }
-  .chat-welcome { margin: auto; text-align: center; padding: 20px; max-width: 460px; }
+  .chat-welcome { margin: auto; text-align: center; padding: 20px 20px 10vh; max-width: 520px; }
+  .chat-welcome .suggestions { margin-top: 26px; }
   .bruno-mark {
     width: 72px; height: 72px; line-height: 72px; margin: 0 auto 18px;
     border-radius: 50%; background: var(--accent); color: #fff;
