@@ -4,7 +4,7 @@ import { z } from "zod";
 import { runOutboundAgent } from "../agents/outboundAgent.js";
 import { env, isProduction } from "../config/env.js";
 import { getConfigValue, isAgentPaused, setAgentPaused } from "../db/config.js";
-import { appendConversationTurn, loadConversation } from "../db/conversations.js";
+import { appendConversationTurn, listWebSessions, loadConversation, type WebChatSession } from "../db/conversations.js";
 import {
   claimDraftForSend,
   getDraftWithContext,
@@ -50,7 +50,19 @@ import { renderMessagePage, renderShell, type ShellContext } from "./ui.js";
 
 const COOKIE_NAME = "bruno_dash";
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 60; // 60 days
-const WEB_CHAT_THREAD_KEY = "web:console";
+const CHAT_ID_PATTERN = /^[A-Za-z0-9-]{3,40}$/;
+
+function threadKeyFor(chatId: string) {
+  return `web:${chatId}`;
+}
+
+function modelLabel() {
+  return env.CLAUDE_STRONG_MODEL
+    .replace(/^claude-/, "")
+    .replace(/-\d{8}$/, "")
+    .replace(/(\d)-(\d)/g, "$1.$2")
+    .replace(/-/g, " ");
+}
 
 // ————— Auth —————
 
@@ -138,13 +150,16 @@ function authorizePage(request: FastifyRequest, reply: FastifyReply, path: strin
 async function loadShellContext(
   active: ShellContext["active"],
   title: string,
-  autoRefresh: boolean
+  autoRefresh: boolean,
+  options: { activeChatId?: string; sessions?: WebChatSession[] } = {}
 ): Promise<ShellContext> {
+  const sessions = options.sessions ?? (await listWebSessions(12));
+  const dockChatId = sessions[0]?.chatId ?? "console";
   const [agentPaused, pendingCount, queue, dockTurns] = await Promise.all([
     isAgentPaused(),
     getPendingDraftCount(),
     getQueueSummary(),
-    active === "bruno" ? Promise.resolve(undefined) : loadConversation(WEB_CHAT_THREAD_KEY, 8)
+    active === "bruno" ? Promise.resolve(undefined) : loadConversation(threadKeyFor(dockChatId), 8)
   ]);
 
   return {
@@ -155,7 +170,10 @@ async function loadShellContext(
     agentPaused,
     generatedAt: new Date(),
     autoRefresh,
-    dockTurns
+    dockTurns,
+    sessions: sessions.map((s) => ({ chatId: s.chatId, title: s.title, lastAt: s.lastAt })),
+    activeChatId: options.activeChatId,
+    dockChatId
   };
 }
 
@@ -362,12 +380,26 @@ export async function registerDashboard(app: FastifyInstance) {
     app.get(from, async (_request, reply) => reply.redirect(to, 301));
   }
 
+  // New chat session
+  app.get("/dashboard/new", async (request, reply) => {
+    if (!authorizePage(request, reply, "/dashboard/new")) return reply;
+    return reply.redirect(`/dashboard?chat=${crypto.randomUUID()}`, 302);
+  });
+
   // Bruno — briefing + chat home
   app.get("/dashboard", async (request, reply) => {
     if (!authorizePage(request, reply, "/dashboard")) return reply;
+
+    const sessions = await listWebSessions(12);
+    const requested = (request.query as Record<string, unknown>)?.chat;
+    const chatId =
+      typeof requested === "string" && CHAT_ID_PATTERN.test(requested)
+        ? requested
+        : (sessions[0]?.chatId ?? crypto.randomUUID());
+
     const [shell, turns, drafts, replies24h, dailyRows, lastPollAt, pulse] = await Promise.all([
-      loadShellContext("bruno", "Bruno", false),
-      loadConversation(WEB_CHAT_THREAD_KEY, 40),
+      loadShellContext("bruno", "Bruno", false, { activeChatId: chatId, sessions }),
+      loadConversation(threadKeyFor(chatId), 40),
       listPendingDrafts(20),
       getRecentReplySummary(24),
       listRecentDailyMetrics(2),
@@ -401,7 +433,9 @@ export async function registerDashboard(app: FastifyInstance) {
           campaignStatus: pulse?.statusLabel,
           campaignSent: pulse?.sent,
           dailyLimit: pulse?.dailyLimit
-        })
+        },
+        chatId,
+        modelLabel())
       )
     );
   });
@@ -523,16 +557,19 @@ export async function registerDashboard(app: FastifyInstance) {
   app.post("/dashboard/api/chat", async (request, reply) => {
     if (!isAuthorized(request)) return reply.code(401).send({ error: "not authorized" });
 
-    const parsed = z.object({ message: z.string().min(1).max(4000) }).safeParse(request.body);
+    const parsed = z
+      .object({ message: z.string().min(1).max(4000), chatId: z.string().regex(CHAT_ID_PATTERN).default("console") })
+      .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "message is required" });
 
+    const threadKey = threadKeyFor(parsed.data.chatId);
     const message = parsed.data.message.trim();
-    await appendConversationTurn(WEB_CHAT_THREAD_KEY, "user", message);
+    await appendConversationTurn(threadKey, "user", message);
 
     try {
-      const history = await loadConversation(WEB_CHAT_THREAD_KEY, 30);
+      const history = await loadConversation(threadKey, 30);
       const result = await runOutboundAgent(history);
-      await appendConversationTurn(WEB_CHAT_THREAD_KEY, "assistant", result.text);
+      await appendConversationTurn(threadKey, "assistant", result.text);
       return reply.send({ text: result.text, toolCalls: result.toolCalls });
     } catch (error) {
       request.log.error({ err: error }, "dashboard chat: agent run failed");

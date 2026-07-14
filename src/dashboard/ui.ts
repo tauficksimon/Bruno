@@ -9,6 +9,12 @@ export interface ChatTurn {
   content: string;
 }
 
+export interface SessionView {
+  chatId: string;
+  title: string;
+  lastAt: string;
+}
+
 export interface ShellContext {
   active: "bruno" | "inbox" | "campaign" | "system";
   title: string;
@@ -20,6 +26,12 @@ export interface ShellContext {
   autoRefresh: boolean;
   /** Recent agent conversation, rendered into the floating dock (non-chat pages). */
   dockTurns?: ChatTurn[];
+  /** The owner's chat sessions with Bruno, newest first (sidebar list). */
+  sessions: SessionView[];
+  /** Session highlighted in the sidebar / used by the chat page. */
+  activeChatId?: string;
+  /** Session the floating dock posts into (latest one). */
+  dockChatId?: string;
 }
 
 export function escapeHtml(value: string) {
@@ -90,11 +102,33 @@ const ICONS: Record<ShellContext["active"], string> = {
 };
 
 const NAV_ITEMS: Array<{ key: ShellContext["active"]; href: string; label: string }> = [
-  { key: "bruno", href: "/dashboard", label: "Bruno" },
   { key: "inbox", href: "/dashboard/inbox", label: "Inbox" },
   { key: "campaign", href: "/dashboard/campaign", label: "Campaign" },
   { key: "system", href: "/dashboard/system", label: "System" }
 ];
+
+function renderSessions(ctx: ShellContext) {
+  const items =
+    ctx.sessions.length === 0
+      ? `<div class="sess-empty muted">No chats yet — start one.</div>`
+      : ctx.sessions
+          .map(
+            (session) =>
+              `<a class="sess${ctx.active === "bruno" && session.chatId === ctx.activeChatId ? " sess-active" : ""}" href="/dashboard?chat=${encodeURIComponent(session.chatId)}">
+                <span class="sess-title">${escapeHtml(session.title)}</span>
+                <span class="sess-time mono">${relativeTime(session.lastAt, ctx.generatedAt)}</span>
+              </a>`
+          )
+          .join("\n");
+  return `
+  <div class="sessions">
+    <div class="sessions-head">
+      <span>Chats</span>
+      <a class="new-chat" href="/dashboard/new" title="New chat">+</a>
+    </div>
+    ${items}
+  </div>`;
+}
 
 function navCount(item: ShellContext["active"], ctx: ShellContext) {
   if (item === "inbox" && ctx.pendingCount > 0) return `<span class="nav-count">${ctx.pendingCount}</span>`;
@@ -112,7 +146,7 @@ function renderDock(ctx: ShellContext) {
       <a class="dock-expand mono" href="/dashboard">full view ↗</a>
       <button class="dock-close" id="dock-close" aria-label="Close">×</button>
     </div>
-    <div class="chat" data-chat>
+    <div class="chat" data-chat data-chat-id="${escapeHtml(ctx.dockChatId ?? "console")}">
       <div class="chat-scroll" data-chat-scroll>
         ${renderChatTurns(ctx.dockTurns.slice(-8), `<div class="chat-empty muted">Ask Bruno anything — campaign numbers, inbox health, a draft…</div>`)}
       </div>
@@ -243,6 +277,29 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
     background: var(--accent-mid); border-radius: 999px; padding: 1px 7px; font-weight: 600;
   }
   .nav-count-bad { background: var(--cta); color: #fff; }
+
+  /* ——— Chat sessions ——— */
+  .sessions { display: flex; flex-direction: column; padding: 14px 10px 6px; gap: 1px; min-height: 0; overflow-y: auto; }
+  .sessions-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--muted); padding: 0 10px 8px;
+  }
+  .new-chat {
+    text-decoration: none; color: var(--ink-2); font-size: 16px; line-height: 1;
+    width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 6px; border: 1px solid var(--hairline-2);
+  }
+  .new-chat:hover { color: #fff; border-color: var(--accent); background: var(--accent-soft); }
+  .sess {
+    display: flex; align-items: baseline; gap: 8px; text-decoration: none;
+    padding: 7px 10px; border-radius: 8px; color: var(--ink-2); font-size: 13px;
+  }
+  .sess:hover { background: var(--surface); color: var(--ink); }
+  .sess-active { background: var(--surface-2); color: #fff; }
+  .sess-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess-time { flex: 0 0 auto; font-size: 10px; color: var(--muted); }
+  .sess-empty { font-size: 12px; padding: 4px 10px; }
 
   .side-foot { margin-top: auto; padding: 14px; border-top: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 8px; }
   .chip {
@@ -505,8 +562,23 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
     padding: 0; flex: 0 0 auto;
   }
   .btn-send:hover:not(:disabled) { background: #2c31e8; }
-  .composer-wrap { margin-top: 14px; }
+  .composer-wrap { margin-top: 14px; position: relative; }
   .composer-wrap .composer { margin-top: 0; }
+  .palette {
+    position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 30;
+    background: var(--surface); border: 1px solid var(--hairline-2); border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5); overflow: hidden;
+  }
+  .palette[hidden] { display: none; }
+  .palette-item {
+    display: flex; align-items: baseline; gap: 12px; width: 100%; text-align: left;
+    background: none; border: none; cursor: pointer; padding: 10px 14px;
+    color: var(--ink-2); font-family: var(--sans); font-size: 13px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .palette-item:last-child { border-bottom: none; }
+  .palette-item .cmd { font-family: var(--mono); font-size: 12px; color: var(--accent); min-width: 90px; }
+  .palette-item:hover, .palette-item.sel { background: var(--surface-2); color: var(--ink); }
   .composer-foot {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     padding: 8px 6px 0; font-family: var(--mono); font-size: 10.5px; color: var(--muted);
@@ -569,6 +641,7 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   <nav class="nav">
     ${navHtml}
   </nav>
+  ${renderSessions(ctx)}
   <div class="side-foot">
     ${agentChip}
     ${failedChip}
@@ -621,21 +694,77 @@ ${renderDock(ctx)}
     return el;
   }
 
+  /* ——— Slash commands ——— */
+  var COMMANDS = [
+    { cmd: "/new", desc: "Start a new chat", run: function () { location.href = "/dashboard/new"; } },
+    { cmd: "/status", desc: "Full status update from Bruno", run: function (form, textarea) {
+        textarea.value = "Give me a full status update: campaign, inboxes, replies, and anything that needs my attention.";
+        form.requestSubmit();
+      } },
+    { cmd: "/pause", desc: "Pause Bruno (stops classifying and drafting)", run: function () { setPaused(true); } },
+    { cmd: "/resume", desc: "Resume Bruno", run: function () { setPaused(false); } },
+    { cmd: "/inbox", desc: "Open the Inbox", run: function () { location.href = "/dashboard/inbox"; } },
+    { cmd: "/campaign", desc: "Open Campaign", run: function () { location.href = "/dashboard/campaign"; } },
+    { cmd: "/system", desc: "Open System health", run: function () { location.href = "/dashboard/system"; } }
+  ];
+  function setPaused(paused) {
+    fetch("/dashboard/api/agent/pause", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paused: paused })
+    }).then(function (r) { if (r.ok) location.reload(); });
+  }
+
   document.querySelectorAll("[data-chat-form]").forEach(function (form) {
     var chat = form.closest("[data-chat]");
     var scroll = chat.querySelector("[data-chat-scroll]");
     var textarea = form.querySelector("textarea");
+    var chatId = chat.getAttribute("data-chat-id") || "console";
+    var palette = form.parentElement ? form.parentElement.querySelector(".palette") : null;
     scroll.scrollTop = scroll.scrollHeight;
 
+    function matchedCommands() {
+      var value = textarea.value.trim().toLowerCase();
+      if (!value.startsWith("/")) return [];
+      return COMMANDS.filter(function (c) { return c.cmd.indexOf(value) === 0; });
+    }
+    function renderPalette() {
+      if (!palette) return;
+      var matches = matchedCommands();
+      if (matches.length === 0) { palette.hidden = true; return; }
+      palette.innerHTML = matches.map(function (c, i) {
+        return '<button type="button" class="palette-item' + (i === 0 ? " sel" : "") + '" data-cmd="' + c.cmd + '"><span class="cmd">' + c.cmd + '</span><span>' + c.desc + "</span></button>";
+      }).join("");
+      palette.hidden = false;
+      palette.querySelectorAll(".palette-item").forEach(function (item) {
+        item.addEventListener("click", function () {
+          palette.hidden = true;
+          var command = COMMANDS.find(function (c) { return c.cmd === item.getAttribute("data-cmd"); });
+          textarea.value = "";
+          if (command) command.run(form, textarea);
+        });
+      });
+    }
+    textarea.addEventListener("input", renderPalette);
+
     textarea.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && palette && !palette.hidden) { palette.hidden = true; return; }
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
+        var matches = matchedCommands();
+        if (palette && matches.length > 0) {
+          palette.hidden = true;
+          textarea.value = "";
+          matches[0].run(form, textarea);
+          return;
+        }
         form.requestSubmit();
       }
     });
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      if (palette) palette.hidden = true;
       var message = textarea.value.trim();
       if (!message || chatBusy) return;
       chatBusy = true;
@@ -648,7 +777,7 @@ ${renderDock(ctx)}
       fetch("/dashboard/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: message })
+        body: JSON.stringify({ message: message, chatId: chatId })
       })
         .then(function (response) { return response.json().then(function (body) { return { ok: response.ok, body: body }; }); })
         .then(function (result) {

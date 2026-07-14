@@ -38,6 +38,41 @@ export async function appendConversationTurnIfLatestDiffers(
   return true;
 }
 
+export interface WebChatSession {
+  chatId: string;
+  title: string;
+  lastAt: string;
+  turnCount: number;
+}
+
+/**
+ * The owner's chat sessions with Bruno (thread keys "web:<id>"), newest first.
+ * Title = the session's first user message, truncated for the sidebar.
+ */
+export async function listWebSessions(limit = 12): Promise<WebChatSession[]> {
+  const result = await pool.query<{ thread_key: string; title: string | null; last_at: string; turn_count: string }>(
+    `
+      SELECT
+        thread_key,
+        (array_agg(content ORDER BY created_at ASC) FILTER (WHERE role = 'user'))[1] AS title,
+        max(created_at)::text AS last_at,
+        count(*)::text AS turn_count
+      FROM agent_conversations
+      WHERE thread_key LIKE 'web:%'
+      GROUP BY thread_key
+      ORDER BY max(created_at) DESC
+      LIMIT $1
+    `,
+    [limit]
+  );
+  return result.rows.map((row) => ({
+    chatId: row.thread_key.slice(4),
+    title: (row.title ?? "New chat").slice(0, 60),
+    lastAt: row.last_at,
+    turnCount: Number(row.turn_count)
+  }));
+}
+
 /**
  * Load the most recent turns for a thread, oldest-first, for use as agent history.
  */

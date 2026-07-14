@@ -154,13 +154,13 @@ function briefingRows(b: BriefingModel) {
   return rows;
 }
 
-export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel) {
+export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel, chatId: string, modelLabel: string) {
   const welcome = `
     <div class="chat-welcome">
       <div class="bruno-mark">✳</div>
       <h2>Bruno</h2>
       <p>Runs your outbound — watches the campaign, reads every reply, drafts the responses.</p>
-      <p class="hint muted">Type a message below — he answers with live numbers, not guesses.</p>
+      <p class="hint muted">Type a message below · <span class="mono">/</span> for commands</p>
       <div class="suggestions">
         <button class="suggestion">How is the campaign doing?</button>
         <button class="suggestion">What's our inbox health?</button>
@@ -169,6 +169,10 @@ export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel) {
       </div>
     </div>`;
   const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const pendingChip =
+    briefing.pendingCount > 0
+      ? `<a href="/dashboard/inbox">${briefing.pendingCount} waiting → Inbox</a>`
+      : `<span>kinta · outbound</span>`;
   return `
   <main class="main-chat reveal">
     <section class="briefing">
@@ -177,20 +181,21 @@ export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel) {
         .map((row) => `<div class="briefing-row">${row}</div>`)
         .join("\n")}
     </section>
-    <div class="chat" data-chat>
+    <div class="chat" data-chat data-chat-id="${escapeHtml(chatId)}">
       <div class="chat-scroll" data-chat-scroll>
         ${renderChatTurns(turns, welcome)}
       </div>
       <div class="composer-wrap">
+        <div class="palette" hidden></div>
         <form class="composer" data-chat-form>
-          <textarea name="message" rows="2" placeholder="Message Bruno… (Enter to send, Shift+Enter for a new line)" required></textarea>
+          <textarea name="message" rows="2" placeholder="Message Bruno… ( / for commands )" required></textarea>
           <button class="btn btn-send" type="submit" aria-label="Send">${SEND_ICON}</button>
         </form>
         <div class="composer-foot">
           <span><span class="live-dot${briefing.agentPaused ? " paused" : ""}"></span>${briefing.agentPaused ? "paused" : "running"}${
             briefing.lastPollAgo ? ` · replies checked ${briefing.lastPollAgo}` : ""
-          }</span>
-          <span>kinta · outbound</span>
+          } · ${escapeHtml(modelLabel)}</span>
+          ${pendingChip}
         </div>
       </div>
     </div>
