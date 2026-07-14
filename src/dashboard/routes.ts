@@ -423,10 +423,9 @@ export async function registerDashboard(app: FastifyInstance) {
 
     const sessions = await listWebSessions(12);
     const requested = (request.query as Record<string, unknown>)?.chat;
+    // No ?chat → a fresh conversation every time; history lives in the sidebar.
     const chatId =
-      typeof requested === "string" && CHAT_ID_PATTERN.test(requested)
-        ? requested
-        : (sessions[0]?.chatId ?? crypto.randomUUID());
+      typeof requested === "string" && CHAT_ID_PATTERN.test(requested) ? requested : crypto.randomUUID();
 
     const isChannel = chatId === "updates";
     const [shell, turns, drafts, replies24h, dailyRows, lastPollAt, pulse] = await Promise.all([
