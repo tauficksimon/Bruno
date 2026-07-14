@@ -10,6 +10,7 @@ export interface PendingDraftRow {
   intent: string;
   confidence: number;
   reason: string;
+  suggested_next_action: string | null;
   email: string | null;
   company_name: string | null;
   raw_thread: string | null;
@@ -27,6 +28,7 @@ const draftWithContextSelect = `
     rc.intent,
     rc.confidence::float AS confidence,
     rc.reason,
+    rc.suggested_next_action,
     rc.email,
     rc.company_name,
     rc.raw_thread,
@@ -153,6 +155,100 @@ export async function getRecentReplySummary(hours: number) {
     count: Number(row.count),
     latestCompany: row.latest_company ?? undefined
   }));
+}
+
+// ————— Lead dossier (Postgres half) —————
+
+export interface LeadClassificationRow {
+  id: string;
+  intent: string;
+  confidence: number;
+  reason: string;
+  suggested_next_action: string | null;
+  raw_thread: string | null;
+  created_at: string;
+  draft_id: string | null;
+  draft_status: string | null;
+  draft_subject: string | null;
+  draft_body: string | null;
+}
+
+export interface LeadApprovalRow {
+  action: string;
+  notes: string | null;
+  final_subject: string | null;
+  final_body: string | null;
+  created_at: string;
+  draft_id: string | null;
+}
+
+export interface LeadSuppressionRow {
+  reason: string;
+  created_at: string;
+}
+
+export async function getLeadActivity(email: string) {
+  const [classifications, approvals, suppressions] = await Promise.all([
+    pool.query<LeadClassificationRow>(
+      `
+        SELECT rc.id, rc.intent, rc.confidence::float AS confidence, rc.reason,
+               rc.suggested_next_action, rc.raw_thread, rc.created_at::text,
+               d.id AS draft_id, d.status AS draft_status, d.subject AS draft_subject, d.body AS draft_body
+        FROM reply_classifications rc
+        LEFT JOIN drafts d ON d.reply_classification_id = rc.id
+        WHERE lower(rc.email) = lower($1)
+        ORDER BY rc.created_at ASC
+      `,
+      [email]
+    ),
+    pool.query<LeadApprovalRow>(
+      `
+        SELECT a.action, a.notes, a.final_subject, a.final_body, a.created_at::text, a.draft_id
+        FROM approvals a
+        JOIN drafts d ON d.id = a.draft_id
+        JOIN reply_classifications rc ON rc.id = d.reply_classification_id
+        WHERE lower(rc.email) = lower($1)
+        ORDER BY a.created_at ASC
+      `,
+      [email]
+    ),
+    pool.query<LeadSuppressionRow>(
+      "SELECT reason, created_at::text FROM suppression_events WHERE lower(email) = lower($1) ORDER BY created_at ASC",
+      [email]
+    )
+  ]);
+  return { classifications: classifications.rows, approvals: approvals.rows, suppressions: suppressions.rows };
+}
+
+export interface LocalSearchRow {
+  email: string;
+  company_name: string | null;
+  last_intent: string | null;
+  last_at: string;
+  pending_draft: boolean;
+}
+
+/** Search Bruno's own records by email/company fragment. */
+export async function searchLeadsLocal(q: string, limit = 12): Promise<LocalSearchRow[]> {
+  const result = await pool.query<LocalSearchRow>(
+    `
+      SELECT
+        lower(rc.email) AS email,
+        (array_agg(rc.company_name ORDER BY rc.created_at DESC))[1] AS company_name,
+        (array_agg(rc.intent ORDER BY rc.created_at DESC))[1] AS last_intent,
+        max(rc.created_at)::text AS last_at,
+        bool_or(d.status = 'drafted') AS pending_draft
+      FROM reply_classifications rc
+      LEFT JOIN drafts d ON d.reply_classification_id = rc.id
+      WHERE rc.email IS NOT NULL
+        AND (rc.email ILIKE '%' || $1 || '%' OR rc.company_name ILIKE '%' || $1 || '%')
+      GROUP BY lower(rc.email)
+      ORDER BY max(rc.created_at) DESC
+      LIMIT $2
+    `,
+    [q, limit]
+  );
+  return result.rows;
 }
 
 export interface ApprovalLogRow {

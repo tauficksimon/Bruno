@@ -20,6 +20,10 @@ export async function setCachedValue(key: string, value: unknown, ttlSeconds: nu
   );
 }
 
+export async function deleteCachedValue(key: string) {
+  await pool.query("DELETE FROM cached_records WHERE cache_key = $1", [key]);
+}
+
 /**
  * Read-through cache: serve from cached_records, else run the loader and store.
  * Loader failures propagate — callers decide how to degrade.

@@ -1,7 +1,7 @@
 import { activateAlertOnce, clearAlertOnce, isAgentPaused, setConfigValue } from "../db/config.js";
 import { recordEvent } from "../db/events.js";
 import { listInstantlyCampaigns, listRecentReplies } from "../integrations/instantly.js";
-import { postError } from "../integrations/slack.js";
+import { notifyAlert } from "../integrations/notify.js";
 import { enqueueJob, type QueueJob } from "../queue/queue.js";
 import { normalizeInstantlyEvent } from "../webhooks/normalizeInstantlyEvent.js";
 
@@ -16,7 +16,7 @@ export async function processReplyPollJob(job: QueueJob) {
 
   if (await isAgentPaused()) {
     if (await activateAlertOnce("reply-poll-paused")) {
-      await postError("Agent kill switch is on. Skipping reply polling so no new classify/draft work starts.");
+      await notifyAlert("Agent kill switch is on. Skipping reply polling so no new classify/draft work starts.");
     }
     return;
   }

@@ -98,3 +98,35 @@ export async function loadConversation(threadKey: string, limit = 20): Promise<C
   }
   return turns;
 }
+
+/**
+ * Channel variant: keeps leading assistant turns (a channel is mostly
+ * Bruno-first) and satisfies the user-first API requirement with a synthetic
+ * opener, so replies get the feed as context.
+ */
+export async function loadChannelConversation(threadKey: string, limit = 30): Promise<ConversationTurn[]> {
+  const result = await pool.query<{ role: "user" | "assistant"; content: string }>(
+    `
+      SELECT role, content
+      FROM (
+        SELECT role, content, created_at
+        FROM agent_conversations
+        WHERE thread_key = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+      ) recent
+      ORDER BY created_at ASC
+    `,
+    [threadKey, limit]
+  );
+  return result.rows.map((row) => ({ role: row.role, content: row.content }));
+}
+
+/** Newest post time in a channel thread (for the sidebar unread dot). */
+export async function getChannelLatestAt(threadKey: string): Promise<string | undefined> {
+  const result = await pool.query<{ latest: string | null }>(
+    "SELECT max(created_at)::text AS latest FROM agent_conversations WHERE thread_key = $1",
+    [threadKey]
+  );
+  return result.rows[0]?.latest ?? undefined;
+}

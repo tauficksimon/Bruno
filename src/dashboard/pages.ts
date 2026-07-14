@@ -154,13 +154,28 @@ function briefingRows(b: BriefingModel) {
   return rows;
 }
 
-export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel, chatId: string, modelLabel: string) {
-  const welcome = `
+export function renderBrunoPage(
+  turns: ChatTurn[],
+  briefing: BriefingModel,
+  chatId: string,
+  modelLabel: string,
+  mode: "chat" | "channel" = "chat"
+) {
+  const welcome =
+    mode === "channel"
+      ? `
+    <div class="chat-welcome">
+      <div class="bruno-mark">✳</div>
+      <h2># updates</h2>
+      <p>Bruno posts here on his own — the morning digest, alerts the minute they fire, weekly analytics.</p>
+      <p class="hint muted">Nothing yet. The first digest lands tomorrow morning — and you can reply under any update.</p>
+    </div>`
+      : `
     <div class="chat-welcome">
       <div class="bruno-mark">✳</div>
       <h2>Bruno</h2>
-      <p>Runs your outbound — watches the campaign, reads every reply, drafts the responses.</p>
-      <p class="hint muted">Type a message below · <span class="mono">/</span> for commands</p>
+      <p>Campaign, replies, drafts — he's on it. Ask him anything.</p>
+      <p class="hint muted">Type below · <span class="mono">/</span> for commands</p>
       <div class="suggestions">
         <button class="suggestion">How is the campaign doing?</button>
         <button class="suggestion">What's our inbox health?</button>
@@ -197,7 +212,7 @@ export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel, chat
       <div class="composer-wrap">
         <div class="palette" hidden></div>
         <form class="composer" data-chat-form>
-          <textarea name="message" rows="2" placeholder="Message Bruno… ( / for commands )" required></textarea>
+          <textarea name="message" rows="2" placeholder="${mode === "channel" ? "Reply to Bruno's updates…" : "Message Bruno… ( / for commands )"}" required></textarea>
           <button class="btn btn-send" type="submit" aria-label="Send">${SEND_ICON}</button>
         </form>
         <div class="composer-foot">
@@ -211,6 +226,222 @@ export function renderBrunoPage(turns: ChatTurn[], briefing: BriefingModel, chat
   </main>`;
 }
 
+// ————— Lead dossier —————
+
+export type TimelineItem =
+  | { kind: "sent"; at?: string; subject?: string; from?: string; text?: string }
+  | { kind: "received"; at?: string; subject?: string; text?: string }
+  | { kind: "read"; at: string; intent: string; confidence: number; reason: string; suggested?: string }
+  | { kind: "decision"; at: string; action: string; notes?: string; original?: string; finalText?: string }
+  | { kind: "suppression"; at: string; reason: string };
+
+export interface LeadDossierModel {
+  email: string;
+  name?: string;
+  company?: string;
+  interestLabel?: string;
+  sequenceLabel?: string;
+  engagement?: EngagementView;
+  customFields: Record<string, string>;
+  hasPendingDraft: boolean;
+  timeline: TimelineItem[];
+  threadUnavailable: boolean;
+}
+
+const INTEREST_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 1, label: "interested" },
+  { value: 2, label: "meeting booked" },
+  { value: 3, label: "meeting completed" },
+  { value: 4, label: "closed" },
+  { value: -1, label: "not interested" },
+  { value: -2, label: "wrong person" },
+  { value: -3, label: "lost" }
+];
+
+function renderTimelineItem(item: TimelineItem, now: Date) {
+  const when = item.at ? `<span class="mono muted">${relativeTime(item.at, now)}</span>` : "";
+  switch (item.kind) {
+    case "sent":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-us">we sent</span>
+        <div class="tl-body">
+          <div class="tl-head"><strong>${escapeHtml(item.subject ?? "(no subject)")}</strong>${item.from ? `<span class="mono muted">from ${escapeHtml(item.from)}</span>` : ""}${when}</div>
+          ${item.text ? `<details><summary class="mono muted">show email</summary><blockquote>${escapeHtml(item.text)}</blockquote></details>` : ""}
+        </div>
+      </div>`;
+    case "received":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-them">they replied</span>
+        <div class="tl-body">
+          <div class="tl-head"><strong>${escapeHtml(item.subject ?? "(no subject)")}</strong>${when}</div>
+          ${item.text ? `<blockquote>${escapeHtml(item.text)}</blockquote>` : ""}
+        </div>
+      </div>`;
+    case "read":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-bruno">bruno read</span>
+        <div class="tl-body">
+          <div class="tl-head">${intentBadge(item.intent)}<span class="mono muted">${Math.round(item.confidence * 100)}%</span>${when}</div>
+          <div class="tl-note">${escapeHtml(item.reason)}${item.suggested ? ` — <em>suggested: ${escapeHtml(item.suggested)}</em>` : ""}</div>
+        </div>
+      </div>`;
+    case "decision":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-human">you ${escapeHtml(item.action)}</span>
+        <div class="tl-body">
+          <div class="tl-head">${item.notes ? `<span class="muted">${escapeHtml(item.notes)}</span>` : ""}${when}</div>
+          ${
+            item.action === "edited" && item.original && item.finalText
+              ? `<details><summary class="mono muted">original vs sent</summary>
+                 <div class="section-label" style="margin-top:8px">Bruno's original</div><blockquote>${escapeHtml(item.original)}</blockquote>
+                 <div class="section-label" style="margin-top:8px">What you sent</div><blockquote>${escapeHtml(item.finalText)}</blockquote></details>`
+              : item.finalText
+                ? `<details><summary class="mono muted">show sent reply</summary><blockquote>${escapeHtml(item.finalText)}</blockquote></details>`
+                : ""
+          }
+        </div>
+      </div>`;
+    case "suppression":
+      return `
+      <div class="tl-item">
+        <span class="tl-tag tl-warn">suppressed</span>
+        <div class="tl-body"><div class="tl-head"><span>${escapeHtml(item.reason)} — added to do-not-contact</span>${when}</div></div>
+      </div>`;
+  }
+}
+
+export function renderLeadPage(m: LeadDossierModel, now: Date) {
+  const who = m.name || m.company || m.email;
+  const fields = Object.entries(m.customFields).slice(0, 8);
+  return `
+  <main class="reveal">
+    <section class="card dossier-head">
+      <header class="card-head">
+        <div>
+          <h3>${escapeHtml(who)}</h3>
+          <div class="mono muted">${escapeHtml(m.email)}${m.company && m.name ? ` · ${escapeHtml(m.company)}` : ""}</div>
+        </div>
+        <div class="card-meta">
+          ${m.interestLabel ? `<span class="badge" style="background:rgba(52,211,116,0.13);color:#4ade80">${escapeHtml(m.interestLabel)}</span>` : ""}
+          ${m.sequenceLabel ? `<span class="badge" style="background:rgba(148,163,184,0.14);color:#cbd5e1">${escapeHtml(m.sequenceLabel)}</span>` : ""}
+        </div>
+      </header>
+      ${engagementChips(m.engagement, now)}
+      ${
+        fields.length > 0
+          ? `<div class="eng" style="margin-top:8px">${fields.map(([k, v]) => `<span>${escapeHtml(k)}: ${escapeHtml(v.slice(0, 40))}</span>`).join("")}</div>`
+          : ""
+      }
+      <footer class="card-actions">
+        ${m.hasPendingDraft ? `<a class="btn btn-approve" style="text-decoration:none" href="/dashboard/inbox">Draft waiting → Inbox</a>` : ""}
+        <form class="interest-form" data-interest-form data-email="${escapeHtml(m.email)}">
+          <select name="status" class="interest-select">
+            <option value="">Set pipeline status…</option>
+            ${INTEREST_OPTIONS.map((o) => `<option value="${o.value}"${m.interestLabel === o.label ? " selected" : ""}>${o.label}</option>`).join("")}
+          </select>
+          <button class="btn btn-plain" type="submit">Update</button>
+          <span class="action-status mono" aria-live="polite"></span>
+        </form>
+      </footer>
+    </section>
+    <h2>Timeline</h2>
+    ${m.threadUnavailable ? `<p class="muted">Email thread unavailable from Instantly right now — showing Bruno's records only.</p>` : ""}
+    ${m.timeline.length === 0 ? `<p class="muted">Nothing recorded for this lead yet.</p>` : `<div class="tl">${m.timeline.map((t) => renderTimelineItem(t, now)).join("\n")}</div>`}
+  </main>`;
+}
+
+// ————— Leads (CRM) —————
+
+export interface CrmRow {
+  email: string;
+  name?: string;
+  company?: string;
+  interestLabel?: string;
+  sequenceLabel?: string;
+  opens: number;
+  clicks: number;
+  replies: number;
+  lastContactAt?: string;
+  tags: string;
+}
+
+export function renderLeadsPage(rows: CrmRow[], now: Date, capped: boolean) {
+  const tabs = ["all", "replied", "interested", "in sequence", "finished", "suppressed"];
+  const table =
+    rows.length === 0
+      ? `<div class="empty"><p>No leads in the campaign yet — they'll appear here as soon as the Apollo import lands in Instantly.</p></div>`
+      : `
+      <div class="table-scroll">
+        <table id="crm-table">
+          <thead><tr><th>Lead</th><th>Pipeline</th><th>Sequence</th><th class="num">Opens</th><th class="num">Clicks</th><th class="num">Replies</th><th>Last contact</th></tr></thead>
+          <tbody>
+            ${rows
+              .map(
+                (row) => `
+                <tr data-tags="${escapeHtml(row.tags)}" data-text="${escapeHtml(`${row.name ?? ""} ${row.company ?? ""} ${row.email}`.toLowerCase())}">
+                  <td><a class="lead-link" href="/dashboard/lead?email=${encodeURIComponent(row.email)}"><strong>${escapeHtml(row.name || row.company || row.email)}</strong></a><div class="mono muted">${escapeHtml(row.email)}${row.company && row.name ? ` · ${escapeHtml(row.company)}` : ""}</div></td>
+                  <td>${row.interestLabel ? `<span class="badge" style="background:rgba(52,211,116,0.13);color:#4ade80">${escapeHtml(row.interestLabel)}</span>` : `<span class="muted">—</span>`}</td>
+                  <td class="mono">${escapeHtml(row.sequenceLabel ?? "—")}</td>
+                  <td class="mono num">${row.opens}</td>
+                  <td class="mono num">${row.clicks}</td>
+                  <td class="mono num">${row.replies}</td>
+                  <td class="mono">${row.lastContactAt ? relativeTime(row.lastContactAt, now) : "—"}</td>
+                </tr>`
+              )
+              .join("\n")}
+          </tbody>
+        </table>
+      </div>`;
+
+  return `
+  <main class="reveal">
+    <div class="crm-bar">
+      ${tabs.map((tab, i) => `<button class="crm-tab${i === 0 ? " sel" : ""}" data-crm-filter="${tab}">${tab}</button>`).join("")}
+      <input class="crm-search" id="crm-search" type="text" placeholder="filter by name, company, email…" />
+      <span class="mono muted">${rows.length}${capped ? "+" : ""} leads</span>
+    </div>
+    ${table}
+  </main>`;
+}
+
+// ————— Search results —————
+
+export interface SearchResultRow {
+  email: string;
+  name?: string;
+  company?: string;
+  detail: string;
+  pendingDraft?: boolean;
+}
+
+export function renderSearchPage(q: string, results: SearchResultRow[]) {
+  const rows =
+    results.length === 0
+      ? `<p class="muted">Nothing found for “${escapeHtml(q)}” — try a partial company name or email.</p>`
+      : results
+          .map(
+            (r) => `
+            <div class="feed-row">
+              <div class="feed-top">
+                <a class="lead-link" href="/dashboard/lead?email=${encodeURIComponent(r.email)}"><strong>${escapeHtml(r.name || r.company || r.email)}</strong></a>
+                ${r.pendingDraft ? `<span class="badge" style="background:rgba(240,78,35,0.14);color:#ff8a65">draft waiting</span>` : ""}
+                <span class="mono muted">${escapeHtml(r.email)}</span>
+              </div>
+              <div class="feed-reason muted">${escapeHtml(r.detail)}</div>
+            </div>`
+          )
+          .join("\n");
+  return `
+  <main class="reveal">
+    <h2>Results for “${escapeHtml(q)}”</h2>
+    ${rows}
+  </main>`;
+}
+
 // ————— Inbox —————
 
 export interface DraftCardModel {
@@ -220,6 +451,7 @@ export interface DraftCardModel {
   intent: string;
   confidence: number;
   reason: string;
+  suggestedNextAction?: string;
   internalReason?: string;
   prospectText?: string;
   subject: string;
@@ -247,9 +479,13 @@ export interface ActivityModel {
   createdAt: string;
 }
 
+const HOT_SLA_INTENTS = ["positive", "question", "objection"];
+
 function renderDraftCard(draft: DraftCardModel, now: Date) {
   const who = whoLabel(draft.companyName, draft.email);
   const confidence = `${Math.round(draft.confidence * 100)}%`;
+  const ageMinutes = Math.max(0, Math.floor((now.getTime() - new Date(draft.createdAt).getTime()) / 60000));
+  const slaOver = HOT_SLA_INTENTS.includes(draft.intent) && ageMinutes > 60;
   const sendNote = draft.canSend
     ? `will send from <strong>${escapeHtml(draft.sendFrom ?? "")}</strong>`
     : `<span class="warn-text">can't auto-send — the reply is missing its Instantly message reference; copy the draft and send it from Instantly</span>`;
@@ -258,13 +494,13 @@ function renderDraftCard(draft: DraftCardModel, now: Date) {
   <article class="card" data-draft-id="${escapeHtml(draft.id)}" data-who="${escapeHtml(who)}">
     <header class="card-head">
       <div>
-        <h3>${escapeHtml(who)}</h3>
+        <h3>${draft.email ? `<a class="lead-link" href="/dashboard/lead?email=${encodeURIComponent(draft.email)}">${escapeHtml(who)}</a>` : escapeHtml(who)}</h3>
         ${draft.email ? `<div class="mono muted">${escapeHtml(draft.email)}</div>` : ""}
       </div>
       <div class="card-meta">
         ${intentBadge(draft.intent)}
         <span class="mono muted">${confidence}</span>
-        <span class="mono muted">${relativeTime(draft.createdAt, now)}</span>
+        <span class="mono ${slaOver ? "sla-over" : "muted"}">${relativeTime(draft.createdAt, now)}${slaOver ? " · ⏰ over the 1-hour mark" : ""}</span>
       </div>
     </header>
     ${engagementChips(draft.engagement, now)}
@@ -276,6 +512,7 @@ function renderDraftCard(draft: DraftCardModel, now: Date) {
     <div class="agent-note"><span class="section-label">Bruno's read</span> ${escapeHtml(draft.reason)}${
       draft.internalReason ? ` · <em>${escapeHtml(draft.internalReason)}</em>` : ""
     }</div>
+    ${draft.suggestedNextAction ? `<div class="agent-note"><span class="section-label">Bruno suggests</span> ${escapeHtml(draft.suggestedNextAction)}</div>` : ""}
     <label class="field">
       <span class="section-label">Subject</span>
       <input type="text" name="subject" value="${escapeHtml(draft.subject)}" />

@@ -5,7 +5,7 @@ import { markEventProcessed } from "../db/events.js";
 import { saveDraft, saveReplyClassification } from "../db/replyRecords.js";
 import { saveSuppression } from "../db/suppressions.js";
 import { stopLeadSequence, suppressLead } from "../integrations/instantly.js";
-import { postHotReply, postError } from "../integrations/slack.js";
+import { notifyAlert, notifyHotReply } from "../integrations/notify.js";
 import { enqueueJob, type QueueJob } from "../queue/queue.js";
 import type { InstantlyEvent } from "../types/domain.js";
 
@@ -19,7 +19,7 @@ export async function processInstantlyEventJob(job: QueueJob) {
 
   if (await isAgentPaused()) {
     if (await activateAlertOnce("instantly-event-paused")) {
-      await postError("Agent kill switch is on. Deferring Instantly reply processing; no classifications or drafts will run while paused.");
+      await notifyAlert("Agent kill switch is on. Deferring Instantly reply processing; no classifications or drafts will run while paused.");
     }
     await enqueueJob(job.name, job.payload, {
       runAfter: new Date(Date.now() + 10 * 60 * 1000),
@@ -96,11 +96,11 @@ export async function processInstantlyEventJob(job: QueueJob) {
 
   if (classification.intent === "positive" || classification.intent === "question" || classification.intent === "objection") {
     await stopLeadSequence({ email: event.email, leadId: event.leadId, campaignId: event.campaignId });
-    await postHotReply(formatHotReply(event.companyName, classification.intent, classification.reason, draft?.body));
+    await notifyHotReply(formatHotReply(event.companyName, classification.intent, classification.reason, draft?.body));
   }
 
   if (classification.intent === "unclear") {
-    await postError(`Unclear reply intent for ${event.companyName ?? event.email ?? "unknown lead"}; needs human review.`);
+    await notifyAlert(`Unclear reply intent for ${event.companyName ?? event.email ?? "unknown lead"}; needs human review.`);
   }
 
   await markEventProcessed(eventId);

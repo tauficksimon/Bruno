@@ -355,6 +355,111 @@ export async function getLeadEngagement(input: { email: string; campaignId?: str
   };
 }
 
+/** Instantly CRM interest pipeline (lt_interest_status). */
+export function interestStatusLabel(status?: number) {
+  switch (status) {
+    case 0: return "out of office";
+    case 1: return "interested";
+    case 2: return "meeting booked";
+    case 3: return "meeting completed";
+    case 4: return "closed";
+    case -1: return "not interested";
+    case -2: return "wrong person";
+    case -3: return "lost";
+    default: return undefined;
+  }
+}
+
+export interface InstantlyLeadRecord extends InstantlyLeadEngagement {
+  firstName?: string;
+  lastName?: string;
+  companyName?: string;
+  interestStatus?: number;
+  /** Custom fields carried from the CSV/Apollo import. */
+  customFields: Record<string, string>;
+}
+
+function toLeadRecord(raw: Record<string, unknown>, email: string): InstantlyLeadRecord {
+  const summary = (raw.status_summary ?? {}) as { lastStep?: { from?: string; stepID?: string } };
+  const payload = (raw.payload ?? {}) as Record<string, unknown>;
+  const customFields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (typeof value === "string" && value && !["firstName", "lastName", "email", "companyName", "campaign", "website"].includes(key)) {
+      customFields[key] = value;
+    }
+  }
+  return {
+    email,
+    openCount: typeof raw.email_open_count === "number" ? raw.email_open_count : 0,
+    clickCount: typeof raw.email_click_count === "number" ? raw.email_click_count : 0,
+    replyCount: typeof raw.email_reply_count === "number" ? raw.email_reply_count : 0,
+    status: typeof raw.status === "number" ? raw.status : undefined,
+    lastContactAt: typeof raw.timestamp_last_contact === "string" ? raw.timestamp_last_contact : undefined,
+    lastStepId: typeof summary.lastStep?.stepID === "string" ? summary.lastStep.stepID : undefined,
+    lastStepFrom: typeof summary.lastStep?.from === "string" ? summary.lastStep.from : undefined,
+    firstName: typeof raw.first_name === "string" ? raw.first_name : undefined,
+    lastName: typeof raw.last_name === "string" ? raw.last_name : undefined,
+    companyName: typeof raw.company_name === "string" ? raw.company_name : undefined,
+    interestStatus: typeof raw.lt_interest_status === "number" ? raw.lt_interest_status : undefined,
+    customFields
+  };
+}
+
+/** Full lead record (identity, pipeline state, engagement, custom fields). */
+export async function getLeadRecord(input: { email: string; campaignId?: string }): Promise<InstantlyLeadRecord | undefined> {
+  const response = (await instantlyFetch("/api/v2/leads/list", {
+    method: "POST",
+    body: JSON.stringify({ search: input.email, campaign: input.campaignId, limit: 5 })
+  })) as { items?: unknown };
+  const items = Array.isArray(response.items) ? (response.items as Array<Record<string, unknown>>) : [];
+  const match = items.find((l) => typeof l.email === "string" && l.email.toLowerCase() === input.email.toLowerCase());
+  return match ? toLeadRecord(match, input.email) : undefined;
+}
+
+/** A page of full lead records for the CRM view (cursor-paginated, optional search). */
+export async function listLeadRecordsPage(input: { campaignId?: string; search?: string; limit?: number; startingAfter?: string }) {
+  const response = (await instantlyFetch("/api/v2/leads/list", {
+    method: "POST",
+    body: JSON.stringify({ campaign: input.campaignId, search: input.search, limit: input.limit ?? 100, starting_after: input.startingAfter })
+  })) as { items?: unknown; next_starting_after?: string };
+  const items = Array.isArray(response.items) ? (response.items as Array<Record<string, unknown>>) : [];
+  return {
+    leads: items
+      .filter((l) => typeof l.email === "string")
+      .map((l) => toLeadRecord(l, l.email as string)),
+    nextStartingAfter: response.next_starting_after
+  };
+}
+
+export interface LeadEmailItem {
+  direction: "sent" | "received";
+  at?: string;
+  subject?: string;
+  from?: string;
+  to?: string;
+  text?: string;
+}
+
+/** Full correspondence with one lead, oldest first. Verified live (lead= filter). */
+export async function listLeadEmails(input: { leadEmail: string; limit?: number }): Promise<LeadEmailItem[]> {
+  const response = await instantlyFetch(
+    `/api/v2/emails${queryString({ lead: input.leadEmail, limit: input.limit ?? 50, sort_order: "asc" })}`
+  );
+  return itemsFromListResponse<Record<string, unknown>>(response).map((raw) => {
+    const normalized = normalizeEmail(raw);
+    // ue_type 1 = sent from our inbox; 2 = received from the prospect.
+    const direction = raw.ue_type === 2 || raw.email_type === "received" ? "received" : "sent";
+    return {
+      direction,
+      at: normalized.timestampEmail ?? normalized.timestampCreated,
+      subject: normalized.subject,
+      from: normalized.fromEmail,
+      to: normalized.toEmail,
+      text: normalized.threadText
+    };
+  });
+}
+
 export interface InstantlyWarmupDay {
   date: string;
   sent: number;
@@ -455,6 +560,18 @@ export async function stopLeadSequence(input: { email?: string; leadId?: string;
     body: JSON.stringify({
       lead_email: input.email,
       interest_value: 1,
+      campaign_id: input.campaignId
+    })
+  });
+}
+
+/** Set a lead's CRM pipeline status (lt_interest_status) from the console. */
+export async function setLeadInterest(input: { email: string; interestValue: number; campaignId?: string }) {
+  await instantlyFetch("/api/v2/leads/update-interest-status", {
+    method: "POST",
+    body: JSON.stringify({
+      lead_email: input.email,
+      interest_value: input.interestValue,
       campaign_id: input.campaignId
     })
   });

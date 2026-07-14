@@ -109,3 +109,5 @@ owner's notes. The "Now" section matches the tools implemented in
 `infrastructure-plan.md` §7: Reply Ops → Phase B1–B5 · Campaign Control → B2/D2 ·
 Lead Scoring/Acquisition → B7 · CRM/Instantly State → C1 · Metrics/Analytics →
 A10/C3 · Deliverability → A11/D1 · Learning → C2–C4 · Ops/Safety → A4/A12/B6._
+
+_2026-07-14: `get_lead_history` (from the CRM section's `get_lead`/`get_conversation_thread`/`list_lead_activity` trio) is now implemented in the "Now" set — full per-lead dossier as a tool._

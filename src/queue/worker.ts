@@ -8,7 +8,8 @@ import { processOutboundAgentReplyJob } from "../jobs/processOutboundAgentReply.
 import { processReplyPollJob } from "../jobs/processReplyPoll.js";
 import { processMetricsRollupJob } from "../jobs/processMetricsRollup.js";
 import { processWatchdogJob } from "../jobs/processWatchdog.js";
-import { postError, postSlackReply } from "../integrations/slack.js";
+import { postSlackReply } from "../integrations/slack.js";
+import { notifyAlert } from "../integrations/notify.js";
 
 const logger = pino({ name: "worker" });
 
@@ -87,7 +88,7 @@ export function startWorkerLoop() {
 
 async function notifyTerminalFailure(job: QueueJob, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  await postError(`Job failed permanently: ${job.name} (${job.id}) after ${job.attempts}/${job.maxAttempts} attempts.\n${message}`);
+  await notifyAlert(`Job failed permanently: ${job.name} (${job.id}) after ${job.attempts}/${job.maxAttempts} attempts.\n${message}`);
 
   if (job.name !== "outbound.agent.reply") return;
   const payload = job.payload as { channel?: string; threadTs?: string };

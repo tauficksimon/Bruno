@@ -16,7 +16,7 @@ export interface SessionView {
 }
 
 export interface ShellContext {
-  active: "bruno" | "inbox" | "campaign" | "system";
+  active: "bruno" | "inbox" | "leads" | "campaign" | "system";
   title: string;
   pendingCount: number;
   failedJobs: number;
@@ -32,6 +32,8 @@ export interface ShellContext {
   activeChatId?: string;
   /** Session the floating dock posts into (latest one). */
   dockChatId?: string;
+  /** Timestamp of the newest # updates post (unread dot compares to localStorage). */
+  updatesLatestAt?: string;
 }
 
 export function escapeHtml(value: string) {
@@ -95,6 +97,8 @@ const ICONS: Record<ShellContext["active"], string> = {
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
   inbox:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
+  leads:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   campaign:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
   system:
@@ -103,9 +107,23 @@ const ICONS: Record<ShellContext["active"], string> = {
 
 const NAV_ITEMS: Array<{ key: ShellContext["active"]; href: string; label: string }> = [
   { key: "inbox", href: "/dashboard/inbox", label: "Inbox" },
+  { key: "leads", href: "/dashboard/leads", label: "Leads" },
   { key: "campaign", href: "/dashboard/campaign", label: "Campaign" },
   { key: "system", href: "/dashboard/system", label: "System" }
 ];
+
+function renderChannels(ctx: ShellContext) {
+  const active = ctx.active === "bruno" && ctx.activeChatId === "updates";
+  return `
+  <div class="sessions channels">
+    <div class="sessions-head"><span>Channels</span></div>
+    <a class="sess${active ? " sess-active" : ""}" href="/dashboard?chat=updates" id="channel-updates" data-latest="${escapeHtml(ctx.updatesLatestAt ?? "")}">
+      <span class="sess-title"><span class="ch-hash">#</span> updates</span>
+      <span class="unread-dot" hidden></span>
+      ${ctx.updatesLatestAt ? `<span class="sess-time mono">${relativeTime(ctx.updatesLatestAt, ctx.generatedAt)}</span>` : ""}
+    </a>
+  </div>`;
+}
 
 function renderSessions(ctx: ShellContext) {
   const items =
@@ -278,6 +296,15 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   }
   .nav-count-bad { background: var(--cta); color: #fff; }
 
+  /* ——— Sidebar search ——— */
+  .side-search { padding: 0 14px 10px; }
+  .side-search input {
+    width: 100%; background: var(--surface); border: 1px solid var(--hairline-2); border-radius: 8px;
+    color: var(--ink); font: inherit; font-size: 12.5px; padding: 7px 10px; outline: none;
+  }
+  .side-search input::placeholder { color: var(--muted); }
+  .side-search input:focus { border-color: var(--accent); }
+
   /* ——— Chat sessions ——— */
   .sessions { display: flex; flex-direction: column; padding: 14px 10px 6px; gap: 1px; min-height: 0; overflow-y: auto; }
   .sessions-head {
@@ -300,6 +327,59 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
   .sess-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sess-time { flex: 0 0 auto; font-size: 10px; color: var(--muted); }
   .sess-empty { font-size: 12px; padding: 4px 10px; }
+  .channels { padding-bottom: 0; flex: 0 0 auto; overflow: visible; }
+  .ch-hash { color: var(--accent); font-weight: 700; }
+  .unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cta); flex: 0 0 auto; align-self: center; }
+  .unread-dot[hidden] { display: none; }
+
+  /* ——— Lead dossier timeline ——— */
+  .lead-link { color: inherit; text-decoration: none; }
+  .lead-link:hover { color: var(--accent); text-decoration: underline; }
+  .sla-over { color: var(--cta-hover); font-weight: 600; }
+  .tl { display: flex; flex-direction: column; gap: 10px; }
+  .tl-item {
+    display: flex; gap: 14px; align-items: flex-start;
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px; padding: 12px 14px;
+    overflow-wrap: anywhere;
+  }
+  .tl-tag {
+    flex: 0 0 92px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 3px 0; text-align: center; border-radius: 999px; margin-top: 2px;
+  }
+  .tl-us { background: var(--accent-soft); color: var(--accent); }
+  .tl-them { background: rgba(240,78,35,0.13); color: #ff8a65; }
+  .tl-bruno { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--hairline-2); }
+  .tl-human { background: var(--ok-soft); color: var(--ok); }
+  .tl-warn { background: var(--danger-soft); color: var(--danger); }
+  .tl-body { flex: 1; min-width: 0; }
+  .tl-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 13.5px; }
+  .tl-note { font-size: 13px; color: var(--ink-2); margin-top: 3px; }
+  .tl-body blockquote {
+    margin: 8px 0 0; padding: 9px 12px; border-left: 3px solid var(--hairline-2);
+    background: var(--surface-2); border-radius: 0 8px 8px 0; color: var(--ink);
+    white-space: pre-wrap; font-size: 13px; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto;
+  }
+  .tl-body details > summary { cursor: pointer; margin-top: 6px; }
+  .dossier-head .interest-form { display: flex; gap: 8px; align-items: center; }
+  .interest-select {
+    background: var(--surface-2); border: 1px solid var(--hairline-2); border-radius: 8px;
+    color: var(--ink); font: inherit; font-size: 12.5px; padding: 8px 10px;
+  }
+
+  /* ——— Leads (CRM) ——— */
+  .crm-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .crm-tab {
+    background: var(--surface); border: 1px solid var(--hairline-2); border-radius: 999px;
+    color: var(--ink-2); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 6px 13px; cursor: pointer;
+  }
+  .crm-tab:hover { border-color: var(--accent); color: var(--ink); }
+  .crm-tab.sel { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .crm-search {
+    flex: 1; min-width: 180px; background: var(--surface); border: 1px solid var(--hairline-2); border-radius: 999px;
+    color: var(--ink); font: inherit; font-size: 12.5px; padding: 7px 14px; outline: none;
+  }
+  .crm-search:focus { border-color: var(--accent); }
 
   .side-foot { margin-top: auto; padding: 14px; border-top: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 8px; }
   .chip {
@@ -658,9 +738,13 @@ export function renderShell(ctx: ShellContext, contentHtml: string) {
     <div class="klogo"><span class="k">k</span><span class="dot">.</span></div>
     <div class="brand-name">kinta<span class="dot">.</span><small>outbound console</small></div>
   </div>
+  <form class="side-search" action="/dashboard/search" method="get">
+    <input type="search" name="q" placeholder="Search leads…" required minlength="2" />
+  </form>
   <nav class="nav">
     ${navHtml}
   </nav>
+  ${renderChannels(ctx)}
   ${renderSessions(ctx)}
   <div class="side-foot">
     ${agentChip}
@@ -995,6 +1079,75 @@ ${renderDock(ctx)}
       }).catch(function () { button.disabled = false; alert("Network error — try again."); });
     });
   });
+
+  /* ——— # updates unread dot ——— */
+  var channel = document.getElementById("channel-updates");
+  if (channel) {
+    var latest = channel.getAttribute("data-latest");
+    var seen = localStorage.getItem("lastSeen:updates") || "";
+    var dot = channel.querySelector(".unread-dot");
+    if (channel.classList.contains("sess-active")) {
+      if (latest) localStorage.setItem("lastSeen:updates", latest);
+    } else if (dot && latest && latest > seen) {
+      dot.hidden = false;
+    }
+  }
+
+  /* ——— Leads (CRM) filters ——— */
+  var crmTable = document.getElementById("crm-table");
+  if (crmTable) {
+    var crmRows = Array.prototype.slice.call(crmTable.querySelectorAll("tbody tr"));
+    var activeTag = "all";
+    var textFilter = "";
+    function applyCrm() {
+      crmRows.forEach(function (row) {
+        var tagOk = activeTag === "all" || (row.getAttribute("data-tags") || "").split(" ").indexOf(activeTag) !== -1;
+        var textOk = !textFilter || (row.getAttribute("data-text") || "").indexOf(textFilter) !== -1;
+        row.style.display = tagOk && textOk ? "" : "none";
+      });
+    }
+    document.querySelectorAll(".crm-tab").forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        document.querySelectorAll(".crm-tab").forEach(function (t) { t.classList.remove("sel"); });
+        tab.classList.add("sel");
+        activeTag = tab.getAttribute("data-crm-filter").replace(" ", "-");
+        if (activeTag === "all") activeTag = "all";
+        applyCrm();
+      });
+    });
+    var crmSearch = document.getElementById("crm-search");
+    if (crmSearch) {
+      crmSearch.addEventListener("input", function () {
+        textFilter = crmSearch.value.trim().toLowerCase();
+        applyCrm();
+      });
+    }
+  }
+
+  /* ——— Lead pipeline status ——— */
+  var interestForm = document.querySelector("[data-interest-form]");
+  if (interestForm) {
+    interestForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var select = interestForm.querySelector("select");
+      var status = select.value;
+      if (!status) return;
+      var label = select.options[select.selectedIndex].textContent;
+      if (!confirm("Set this lead's pipeline status to \\"" + label + "\\" in Instantly?")) return;
+      var statusEl = interestForm.querySelector(".action-status");
+      statusEl.textContent = "updating…";
+      fetch("/dashboard/api/lead/interest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: interestForm.getAttribute("data-email"), status: Number(status) })
+      })
+        .then(function (r) {
+          if (r.ok) { statusEl.textContent = "updated ✓"; statusEl.className = "action-status mono ok"; setTimeout(function () { location.reload(); }, 700); }
+          else return r.json().then(function (b) { statusEl.textContent = (b && b.error) || "failed"; statusEl.className = "action-status mono err"; });
+        })
+        .catch(function () { statusEl.textContent = "network error"; statusEl.className = "action-status mono err"; });
+    });
+  }
 
   /* ——— Pause toggle ——— */
   var pauseButton = document.getElementById("pause-btn");

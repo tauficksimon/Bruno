@@ -4,10 +4,18 @@ import { z } from "zod";
 import { runOutboundAgent } from "../agents/outboundAgent.js";
 import { env, isProduction } from "../config/env.js";
 import { getConfigValue, isAgentPaused, setAgentPaused } from "../db/config.js";
-import { appendConversationTurn, listWebSessions, loadConversation, type WebChatSession } from "../db/conversations.js";
+import {
+  appendConversationTurn,
+  getChannelLatestAt,
+  listWebSessions,
+  loadChannelConversation,
+  loadConversation,
+  type WebChatSession
+} from "../db/conversations.js";
 import {
   claimDraftForSend,
   getDraftWithContext,
+  getLeadActivity,
   getRecentReplySummary,
   listPendingDrafts,
   listRecentApprovals,
@@ -16,6 +24,7 @@ import {
   recordApproval,
   rejectDraft,
   releaseDraftClaim,
+  searchLeadsLocal,
   type PendingDraftRow
 } from "../db/dashboard.js";
 import {
@@ -25,26 +34,41 @@ import {
   getQueueSummary,
   listRecentDailyMetrics
 } from "../db/metrics.js";
-import { cachedFetch } from "../db/cache.js";
+import { cachedFetch, deleteCachedValue } from "../db/cache.js";
 import { clearFailedJobs, getFailedJobGroups, retryLatestFailedJob } from "../db/ops.js";
 import { hasClaudeKey } from "../integrations/claude.js";
+import { UPDATES_THREAD_KEY } from "../integrations/notify.js";
 import {
   countCampaignLeads,
   getCampaignAnalyticsOverview,
   getInstantlyCampaign,
   getLeadEngagement,
+  getLeadRecord,
   getWarmupAnalytics,
+  interestStatusLabel,
+  leadStatusLabel,
   listInstantlyCampaigns,
+  listLeadEmails,
+  listLeadRecordsPage,
   sendReplyEmail,
-  type InstantlyLeadEngagement
+  setLeadInterest,
+  type InstantlyLeadEngagement,
+  type InstantlyLeadRecord,
+  type LeadEmailItem
 } from "../integrations/instantly.js";
 import {
   renderBrunoPage,
   renderCampaignPage,
   renderInboxPage,
+  renderLeadPage,
+  renderLeadsPage,
+  renderSearchPage,
   renderSystemPage,
+  type CrmRow,
   type DraftCardModel,
-  type ReplyFeedModel
+  type ReplyFeedModel,
+  type SearchResultRow,
+  type TimelineItem
 } from "./pages.js";
 import { renderMessagePage, renderShell, type ShellContext } from "./ui.js";
 
@@ -53,7 +77,8 @@ const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 60; // 60 days
 const CHAT_ID_PATTERN = /^[A-Za-z0-9-]{3,40}$/;
 
 function threadKeyFor(chatId: string) {
-  return `web:${chatId}`;
+  // "updates" is the reserved id for Bruno's proactive channel.
+  return chatId === "updates" ? UPDATES_THREAD_KEY : `web:${chatId}`;
 }
 
 function modelLabel() {
@@ -124,7 +149,10 @@ function authorizePage(request: FastifyRequest, reply: FastifyReply, path: strin
   const key = (request.query as Record<string, unknown>)?.key;
   if (typeof key === "string" && secretMatches(key)) {
     setAuthCookie(reply, key);
-    void reply.redirect(path, 302);
+    // Preserve the rest of the query string (e.g. ?email=… on the dossier).
+    const url = new URL(request.url, "http://local");
+    url.searchParams.delete("key");
+    void reply.redirect(`${path}${url.search}`, 302);
     return false;
   }
 
@@ -155,11 +183,12 @@ async function loadShellContext(
 ): Promise<ShellContext> {
   const sessions = options.sessions ?? (await listWebSessions(12));
   const dockChatId = sessions[0]?.chatId ?? "console";
-  const [agentPaused, pendingCount, queue, dockTurns] = await Promise.all([
+  const [agentPaused, pendingCount, queue, dockTurns, updatesLatestAt] = await Promise.all([
     isAgentPaused(),
     getPendingDraftCount(),
     getQueueSummary(),
-    active === "bruno" ? Promise.resolve(undefined) : loadConversation(threadKeyFor(dockChatId), 8)
+    active === "bruno" ? Promise.resolve(undefined) : loadConversation(threadKeyFor(dockChatId), 8),
+    getChannelLatestAt(UPDATES_THREAD_KEY)
   ]);
 
   return {
@@ -173,7 +202,8 @@ async function loadShellContext(
     dockTurns,
     sessions: sessions.map((s) => ({ chatId: s.chatId, title: s.title, lastAt: s.lastAt })),
     activeChatId: options.activeChatId,
-    dockChatId
+    dockChatId,
+    updatesLatestAt
   };
 }
 
@@ -225,7 +255,8 @@ function toDraftCard(row: PendingDraftRow): DraftCardModel {
     body: row.body,
     createdAt: row.created_at,
     sendFrom: context.eaccount,
-    canSend: Boolean(context.replyToUuid && context.eaccount)
+    canSend: Boolean(context.replyToUuid && context.eaccount),
+    suggestedNextAction: row.suggested_next_action ?? undefined
   };
 }
 
@@ -397,9 +428,10 @@ export async function registerDashboard(app: FastifyInstance) {
         ? requested
         : (sessions[0]?.chatId ?? crypto.randomUUID());
 
+    const isChannel = chatId === "updates";
     const [shell, turns, drafts, replies24h, dailyRows, lastPollAt, pulse] = await Promise.all([
-      loadShellContext("bruno", "Bruno", false, { activeChatId: chatId, sessions }),
-      loadConversation(threadKeyFor(chatId), 40),
+      loadShellContext("bruno", isChannel ? "# updates" : "Bruno", false, { activeChatId: chatId, sessions }),
+      isChannel ? loadChannelConversation(threadKeyFor(chatId), 60) : loadConversation(threadKeyFor(chatId), 40),
       listPendingDrafts(20),
       getRecentReplySummary(24),
       listRecentDailyMetrics(2),
@@ -435,7 +467,8 @@ export async function registerDashboard(app: FastifyInstance) {
           dailyLimit: pulse?.dailyLimit
         },
         chatId,
-        modelLabel())
+        modelLabel(),
+        isChannel ? "channel" : "chat")
       )
     );
   });
@@ -552,6 +585,207 @@ export async function registerDashboard(app: FastifyInstance) {
     );
   });
 
+  // Lead dossier — everything known about one person
+  app.get("/dashboard/lead", async (request, reply) => {
+    if (!authorizePage(request, reply, "/dashboard/lead")) return reply;
+    const emailRaw = (request.query as Record<string, unknown>)?.email;
+    if (typeof emailRaw !== "string" || !emailRaw.includes("@")) return reply.redirect("/dashboard/leads", 302);
+    const email = emailRaw.trim().toLowerCase();
+
+    const [shell, pulse, activity] = await Promise.all([
+      loadShellContext("leads", "Lead", true),
+      loadCampaignPulse(),
+      getLeadActivity(email)
+    ]);
+
+    let record: InstantlyLeadRecord | null = null;
+    let thread: LeadEmailItem[] = [];
+    let threadUnavailable = false;
+    try {
+      record = await cachedFetch<InstantlyLeadRecord | null>(`lead-rec:${email}`, 600, async () => {
+        return (await getLeadRecord({ email, campaignId: pulse?.campaignId })) ?? null;
+      });
+    } catch {
+      record = null;
+    }
+    try {
+      thread = await cachedFetch<LeadEmailItem[]>(`lead-thread:${email}`, 300, () => listLeadEmails({ leadEmail: email, limit: 50 }));
+    } catch {
+      threadUnavailable = true;
+    }
+
+    const timeline: TimelineItem[] = [];
+    for (const item of thread) {
+      timeline.push(
+        item.direction === "sent"
+          ? { kind: "sent", at: item.at, subject: item.subject, from: item.from, text: item.text }
+          : { kind: "received", at: item.at, subject: item.subject, text: item.text }
+      );
+    }
+    for (const c of activity.classifications) {
+      timeline.push({
+        kind: "read",
+        at: c.created_at,
+        intent: c.intent,
+        confidence: c.confidence,
+        reason: c.reason,
+        suggested: c.suggested_next_action ?? undefined
+      });
+    }
+    for (const a of activity.approvals) {
+      const cls = activity.classifications.find((c) => c.draft_id === a.draft_id);
+      timeline.push({
+        kind: "decision",
+        at: a.created_at,
+        action: a.action,
+        notes: a.notes ?? undefined,
+        original: cls?.draft_body ?? undefined,
+        finalText: a.final_body ?? undefined
+      });
+    }
+    for (const s of activity.suppressions) {
+      timeline.push({ kind: "suppression", at: s.created_at, reason: s.reason });
+    }
+    timeline.sort((a, b) => (new Date(a.at ?? 0).getTime() || 0) - (new Date(b.at ?? 0).getTime() || 0));
+
+    const name = record ? [record.firstName, record.lastName].filter(Boolean).join(" ") || undefined : undefined;
+    return reply.type("text/html").send(
+      renderShell(
+        shell,
+        renderLeadPage(
+          {
+            email,
+            name,
+            company: record?.companyName,
+            interestLabel: interestStatusLabel(record?.interestStatus),
+            sequenceLabel: leadStatusLabel(record?.status),
+            engagement: record ?? undefined,
+            customFields: record?.customFields ?? {},
+            hasPendingDraft: activity.classifications.some((c) => c.draft_status === "drafted"),
+            timeline,
+            threadUnavailable
+          },
+          shell.generatedAt
+        )
+      )
+    );
+  });
+
+  // Leads — the CRM view
+  app.get("/dashboard/leads", async (request, reply) => {
+    if (!authorizePage(request, reply, "/dashboard/leads")) return reply;
+    const [shell, pulse] = await Promise.all([loadShellContext("leads", "Leads", true), loadCampaignPulse()]);
+
+    let rows: CrmRow[] = [];
+    let capped = false;
+    if (pulse) {
+      try {
+        const leads = await cachedFetch<InstantlyLeadRecord[]>("crm:leads", 600, async () => {
+          const all: InstantlyLeadRecord[] = [];
+          let cursor: string | undefined;
+          let pages = 0;
+          do {
+            const page = await listLeadRecordsPage({ campaignId: pulse.campaignId, limit: 100, startingAfter: cursor });
+            all.push(...page.leads);
+            cursor = page.nextStartingAfter;
+            pages += 1;
+          } while (cursor && pages < 10);
+          return all;
+        });
+        capped = leads.length >= 1000;
+        rows = leads.slice(0, 1000).map((lead) => {
+          const tags: string[] = [];
+          if (lead.replyCount > 0) tags.push("replied");
+          if (lead.interestStatus !== undefined && lead.interestStatus >= 1) tags.push("interested");
+          if (lead.status === 1 || lead.status === 2) tags.push("in-sequence");
+          if (lead.status === 3) tags.push("finished");
+          if (lead.status !== undefined && lead.status < 0) tags.push("suppressed");
+          return {
+            email: lead.email,
+            name: [lead.firstName, lead.lastName].filter(Boolean).join(" ") || undefined,
+            company: lead.companyName,
+            interestLabel: interestStatusLabel(lead.interestStatus),
+            sequenceLabel: leadStatusLabel(lead.status),
+            opens: lead.openCount,
+            clicks: lead.clickCount,
+            replies: lead.replyCount,
+            lastContactAt: lead.lastContactAt,
+            tags: tags.join(" ")
+          };
+        });
+      } catch {
+        rows = [];
+      }
+    }
+    return reply.type("text/html").send(renderShell(shell, renderLeadsPage(rows, shell.generatedAt, capped)));
+  });
+
+  // Search — Bruno's records + Instantly's lead database
+  app.get("/dashboard/search", async (request, reply) => {
+    if (!authorizePage(request, reply, "/dashboard/search")) return reply;
+    const qRaw = (request.query as Record<string, unknown>)?.q;
+    const q = typeof qRaw === "string" ? qRaw.trim() : "";
+    if (q.length < 2) return reply.redirect("/dashboard/leads", 302);
+
+    const [shell, local, pulse] = await Promise.all([
+      loadShellContext("leads", "Search", false),
+      searchLeadsLocal(q),
+      loadCampaignPulse()
+    ]);
+
+    const results = new Map<string, SearchResultRow>();
+    for (const row of local) {
+      results.set(row.email, {
+        email: row.email,
+        company: row.company_name ?? undefined,
+        detail: `last reply read as ${row.last_intent ?? "?"}`,
+        pendingDraft: row.pending_draft
+      });
+    }
+    try {
+      const remote = await listLeadRecordsPage({ campaignId: pulse?.campaignId, search: q, limit: 10 });
+      for (const lead of remote.leads) {
+        const key = lead.email.toLowerCase();
+        if (results.has(key)) continue;
+        results.set(key, {
+          email: key,
+          name: [lead.firstName, lead.lastName].filter(Boolean).join(" ") || undefined,
+          company: lead.companyName,
+          detail: [leadStatusLabel(lead.status), interestStatusLabel(lead.interestStatus)].filter(Boolean).join(" · ") || "in the lead database"
+        });
+      }
+    } catch {
+      // Instantly search unavailable — local results still render.
+    }
+
+    return reply.type("text/html").send(renderShell(shell, renderSearchPage(q, [...results.values()].slice(0, 20))));
+  });
+
+  // ————— Lead pipeline write-back —————
+
+  app.post("/dashboard/api/lead/interest", async (request, reply) => {
+    if (!isAuthorized(request)) return reply.code(401).send({ error: "not authorized" });
+    const parsed = z
+      .object({ email: z.string().email(), status: z.number().int().min(-3).max(4) })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "email and status are required" });
+
+    const pulse = await loadCampaignPulse();
+    try {
+      await setLeadInterest({
+        email: parsed.data.email,
+        interestValue: parsed.data.status,
+        campaignId: pulse?.campaignId
+      });
+    } catch (error) {
+      request.log.error({ err: error }, "lead interest update failed");
+      return reply.code(502).send({ error: "Instantly rejected the update" });
+    }
+    await deleteCachedValue(`lead-rec:${parsed.data.email.toLowerCase()}`);
+    await deleteCachedValue("crm:leads");
+    return reply.send({ ok: true });
+  });
+
   // ————— Agent chat API —————
 
   app.post("/dashboard/api/chat", async (request, reply) => {
@@ -567,7 +801,17 @@ export async function registerDashboard(app: FastifyInstance) {
     await appendConversationTurn(threadKey, "user", message);
 
     try {
-      const history = await loadConversation(threadKey, 30);
+      let history;
+      if (parsed.data.chatId === "updates") {
+        // Channel replies keep Bruno's own feed as context (user-first API rule
+        // satisfied with a synthetic opener).
+        history = await loadChannelConversation(threadKey, 30);
+        if (history[0]?.role === "assistant") {
+          history.unshift({ role: "user", content: "[Opening Bruno's updates feed — the assistant posts below are your own proactive updates.]" });
+        }
+      } else {
+        history = await loadConversation(threadKey, 30);
+      }
       const result = await runOutboundAgent(history);
       await appendConversationTurn(threadKey, "assistant", result.text);
       return reply.send({ text: result.text, toolCalls: result.toolCalls });
