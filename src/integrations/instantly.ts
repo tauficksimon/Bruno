@@ -257,17 +257,26 @@ export interface InstantlyLeadSummary {
   firstName?: string;
   lastName?: string;
   companyName?: string;
+  jobTitle?: string;
+  customFields: Record<string, string>;
   status?: number;
 }
 
 function normalizeLead(raw: unknown): InstantlyLeadSummary {
   const l = (raw ?? {}) as Record<string, unknown>;
+  const payload = (l.payload ?? {}) as Record<string, unknown>;
+  const customFields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (typeof value === "string" && value) customFields[key] = value;
+  }
   return {
     id: typeof l.id === "string" ? l.id : undefined,
     email: typeof l.email === "string" ? l.email : undefined,
     firstName: typeof l.first_name === "string" ? l.first_name : undefined,
     lastName: typeof l.last_name === "string" ? l.last_name : undefined,
     companyName: typeof l.company_name === "string" ? l.company_name : undefined,
+    jobTitle: typeof l.job_title === "string" ? l.job_title : undefined,
+    customFields,
     status: typeof l.status === "number" ? l.status : undefined
   };
 }
@@ -374,6 +383,7 @@ export interface InstantlyLeadRecord extends InstantlyLeadEngagement {
   firstName?: string;
   lastName?: string;
   companyName?: string;
+  jobTitle?: string;
   interestStatus?: number;
   /** Custom fields carried from the CSV/Apollo import. */
   customFields: Record<string, string>;
@@ -400,6 +410,7 @@ function toLeadRecord(raw: Record<string, unknown>, email: string): InstantlyLea
     firstName: typeof raw.first_name === "string" ? raw.first_name : undefined,
     lastName: typeof raw.last_name === "string" ? raw.last_name : undefined,
     companyName: typeof raw.company_name === "string" ? raw.company_name : undefined,
+    jobTitle: typeof raw.job_title === "string" ? raw.job_title : undefined,
     interestStatus: typeof raw.lt_interest_status === "number" ? raw.lt_interest_status : undefined,
     customFields
   };
@@ -523,6 +534,54 @@ export async function pauseInstantlyCampaign(id: string) {
   return instantlyFetch(`/api/v2/campaigns/${id}/pause`, {
     method: "POST"
   }) as Promise<InstantlyCampaign>;
+}
+
+export interface InstantlyLeadImport {
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  company_name?: string;
+  job_title?: string;
+  website?: string;
+  phone?: string;
+  custom_variables?: Record<string, string | number | boolean | null>;
+}
+
+export interface InstantlyBulkLeadImportResult {
+  status: string;
+  total_sent: number;
+  leads_uploaded: number;
+  in_blocklist: number;
+  duplicated_leads: number;
+  skipped_count: number;
+  invalid_email_count: number;
+  incomplete_count: number;
+  duplicate_email_count: number;
+  remaining_in_plan?: number | null;
+  created_leads?: Array<{ id: string; email: string; index: number }>;
+}
+
+/** Add up to 1,000 leads to a campaign in one idempotent bulk request. */
+export async function addLeadsToInstantlyCampaign(input: {
+  campaignId: string;
+  leads: InstantlyLeadImport[];
+  skipIfInWorkspace?: boolean;
+}) {
+  if (input.leads.length < 1 || input.leads.length > 1000) {
+    throw new Error(`Instantly bulk lead imports require 1-1000 leads; received ${input.leads.length}`);
+  }
+
+  return instantlyFetch("/api/v2/leads/add", {
+    method: "POST",
+    body: JSON.stringify({
+      campaign_id: input.campaignId,
+      leads: input.leads,
+      verify_leads_on_import: false,
+      skip_if_in_workspace: input.skipIfInWorkspace ?? true,
+      skip_if_in_campaign: true,
+      skip_if_in_list: false
+    })
+  }) as Promise<InstantlyBulkLeadImportResult>;
 }
 
 /**

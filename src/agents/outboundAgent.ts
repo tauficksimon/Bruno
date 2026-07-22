@@ -148,7 +148,7 @@ const tools: AgentTool[] = [
   },
   {
     name: "list_leads",
-    description: "List a sample of leads in a campaign (email, name, company).",
+    description: "List a sample of leads in a campaign with identity, persona, target role, and company.",
     inputSchema: {
       type: "object",
       properties: {
@@ -165,7 +165,10 @@ const tools: AgentTool[] = [
         leads: leads.map((l) => ({
           untrusted_prospect_email: l.email,
           untrusted_prospect_name: [l.firstName, l.lastName].filter(Boolean).join(" "),
-          untrusted_company_name: l.companyName
+          untrusted_company_name: l.companyName,
+          untrusted_prospect_job_title: l.jobTitle,
+          untrusted_persona: l.customFields.persona,
+          untrusted_target_role: l.customFields.targetRole
         }))
       };
     }
@@ -260,6 +263,15 @@ const tools: AgentTool[] = [
         untrusted_prospect_email: email,
         untrusted_prospect_name: record ? [record.firstName, record.lastName].filter(Boolean).join(" ") || undefined : undefined,
         untrusted_company_name: record?.companyName,
+        untrusted_lead_segmentation: record
+          ? {
+              prospect_job_title: record.jobTitle,
+              persona: record.customFields.persona,
+              target_role: record.customFields.targetRole,
+              work_item: record.customFields.workItem,
+              batch: record.customFields.batch
+            }
+          : undefined,
         pipeline: record
           ? {
               sequence_status: leadStatusLabel(record.status),

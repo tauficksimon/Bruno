@@ -5,3 +5,6 @@ dist/
 !.env.example
 *.log
 .DS_Store
+
+# Local campaign exports contain prospect PII and must never be committed.
+new-campaign/

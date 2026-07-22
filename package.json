@@ -11,6 +11,7 @@
     "migrate": "tsx src/db/migrate.ts",
     "worker": "tsx src/worker.ts",
     "instantly:create-kinta-campaign": "tsx src/tools/upsertKintaCampaign.ts",
+    "instantly:deploy-personas": "tsx src/tools/deployPersonaCampaigns.ts",
     "agent:chat": "tsx src/tools/chatWithOutboundAgent.ts"
   },
   "dependencies": {

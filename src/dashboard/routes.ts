@@ -290,7 +290,8 @@ const HANDLED_INTENTS = ["not_now", "negative", "unsubscribe"];
 // ————— Live Instantly layer (cached, failure-tolerant) —————
 
 export interface CampaignPulse {
-  campaignId: string;
+  /** Present for a single campaign; omitted for an aggregated persona portfolio. */
+  campaignId?: string;
   campaignName: string;
   statusLabel: string;
   dailyLimit?: number;
@@ -325,40 +326,64 @@ function campaignStatusLabel(status?: number) {
 async function loadCampaignPulse(): Promise<CampaignPulse | null> {
   try {
     return await cachedFetch<CampaignPulse | null>("instantly:pulse", 300, async () => {
-      const campaigns = await listInstantlyCampaigns({ limit: 10 });
-      const campaign = campaigns[0];
-      if (!campaign) return null;
+      const campaigns = await listInstantlyCampaigns({ limit: 100 });
+      if (campaigns.length === 0) return null;
+      const personaCampaigns = campaigns.filter((campaign) => campaign.name.startsWith("Kinta | P"));
+      const selected = personaCampaigns.length > 0 ? personaCampaigns : [campaigns[0]];
 
-      const [detail, analytics, leadCount, warmup] = await Promise.allSettled([
-        getInstantlyCampaign(campaign.id),
-        getCampaignAnalyticsOverview(campaign.id),
-        countCampaignLeads({ campaignId: campaign.id, maxPages: 3 }),
-        (async () => {
-          const emails = campaign.email_list ?? [];
-          return emails.length > 0 ? getWarmupAnalytics(emails) : [];
-        })()
+      const snapshots = await Promise.all(
+        selected.map(async (campaign) => {
+          const [detail, analytics, leadCount] = await Promise.allSettled([
+            getInstantlyCampaign(campaign.id),
+            getCampaignAnalyticsOverview(campaign.id),
+            countCampaignLeads({ campaignId: campaign.id, maxPages: 3 })
+          ]);
+          return { campaign, detail, analytics, leadCount };
+        })
+      );
+      const senderEmails = [
+        ...new Set(
+          snapshots.flatMap((snapshot) =>
+            snapshot.detail.status === "fulfilled"
+              ? snapshot.detail.value.email_list ?? []
+              : snapshot.campaign.email_list ?? []
+          )
+        )
+      ];
+      const warmup = await Promise.allSettled([
+        senderEmails.length > 0 ? getWarmupAnalytics(senderEmails) : Promise.resolve([])
       ]);
-
-      const detailRecord = detail.status === "fulfilled" ? (detail.value as unknown as Record<string, unknown>) : {};
-      const a = analytics.status === "fulfilled" ? analytics.value : undefined;
+      const details = snapshots
+        .filter((snapshot) => snapshot.detail.status === "fulfilled")
+        .map((snapshot) => (snapshot.detail as PromiseFulfilledResult<Awaited<ReturnType<typeof getInstantlyCampaign>>>).value);
+      const analytics = snapshots
+        .filter((snapshot) => snapshot.analytics.status === "fulfilled")
+        .map((snapshot) => (snapshot.analytics as PromiseFulfilledResult<Awaited<ReturnType<typeof getCampaignAnalyticsOverview>>>).value);
+      const counts = snapshots
+        .filter((snapshot) => snapshot.leadCount.status === "fulfilled")
+        .map((snapshot) => (snapshot.leadCount as PromiseFulfilledResult<Awaited<ReturnType<typeof countCampaignLeads>>>).value);
+      const dailyLimits = details
+        .map((detail) => (detail as unknown as { daily_limit?: number }).daily_limit)
+        .filter((limit): limit is number => typeof limit === "number");
+      const statuses = new Set(selected.map((campaign) => campaignStatusLabel(campaign.status)));
 
       return {
-        campaignId: campaign.id,
-        campaignName: campaign.name,
-        statusLabel: campaignStatusLabel(campaign.status),
-        dailyLimit: typeof detailRecord.daily_limit === "number" ? detailRecord.daily_limit : undefined,
-        openTracking: typeof detailRecord.open_tracking === "boolean" ? detailRecord.open_tracking : undefined,
-        leadCount: leadCount.status === "fulfilled" ? leadCount.value.count : undefined,
-        leadCountCapped: leadCount.status === "fulfilled" ? leadCount.value.capped : undefined,
-        sent: a?.emails_sent_count ?? 0,
-        opensUnique: a?.open_count_unique ?? 0,
-        clicks: a?.link_click_count ?? 0,
-        repliesUnique: a?.reply_count_unique ?? 0,
-        bounces: a?.bounced_count ?? 0,
-        unsubscribes: a?.unsubscribed_count ?? 0,
+        campaignId: selected.length === 1 ? selected[0].id : undefined,
+        campaignName: selected.length === 1 ? selected[0].name : `Kinta Persona Portfolio (${selected.length} campaigns)`,
+        statusLabel: statuses.size === 1 ? [...statuses][0] : "mixed",
+        dailyLimit: dailyLimits.length === selected.length ? dailyLimits.reduce((sum, limit) => sum + limit, 0) : undefined,
+        openTracking: details.some((detail) => (detail as unknown as { open_tracking?: boolean }).open_tracking === true),
+        leadCount: counts.length === selected.length ? counts.reduce((sum, count) => sum + count.count, 0) : undefined,
+        leadCountCapped: counts.some((count) => count.capped),
+        sent: analytics.reduce((sum, item) => sum + item.emails_sent_count, 0),
+        opensUnique: analytics.reduce((sum, item) => sum + item.open_count_unique, 0),
+        clicks: analytics.reduce((sum, item) => sum + item.link_click_count, 0),
+        repliesUnique: analytics.reduce((sum, item) => sum + item.reply_count_unique, 0),
+        bounces: analytics.reduce((sum, item) => sum + item.bounced_count, 0),
+        unsubscribes: analytics.reduce((sum, item) => sum + item.unsubscribed_count, 0),
         inboxes:
-          warmup.status === "fulfilled"
-            ? warmup.value.map((w) => ({
+          warmup[0].status === "fulfilled"
+            ? warmup[0].value.map((w) => ({
                 email: w.email,
                 todaySent: w.today?.sent,
                 last7Sent: w.last7DaysSent,
@@ -703,13 +728,15 @@ export async function registerDashboard(app: FastifyInstance) {
             email: lead.email,
             name: [lead.firstName, lead.lastName].filter(Boolean).join(" ") || undefined,
             company: lead.companyName,
+            persona: lead.customFields.persona,
+            targetRole: lead.customFields.targetRole,
             interestLabel: interestStatusLabel(lead.interestStatus),
             sequenceLabel: leadStatusLabel(lead.status),
             opens: lead.openCount,
             clicks: lead.clickCount,
             replies: lead.replyCount,
             lastContactAt: lead.lastContactAt,
-            tags: tags.join(" ")
+            tags: [...tags, lead.customFields.persona, lead.customFields.targetRole].filter(Boolean).join(" ").toLowerCase()
           };
         });
       } catch {

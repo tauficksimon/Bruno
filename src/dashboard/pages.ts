@@ -362,6 +362,8 @@ export interface CrmRow {
   email: string;
   name?: string;
   company?: string;
+  persona?: string;
+  targetRole?: string;
   interestLabel?: string;
   sequenceLabel?: string;
   opens: number;
@@ -379,13 +381,14 @@ export function renderLeadsPage(rows: CrmRow[], now: Date, capped: boolean) {
       : `
       <div class="table-scroll">
         <table id="crm-table">
-          <thead><tr><th>Lead</th><th>Pipeline</th><th>Sequence</th><th class="num">Opens</th><th class="num">Clicks</th><th class="num">Replies</th><th>Last contact</th></tr></thead>
+          <thead><tr><th>Lead</th><th>Persona</th><th>Pipeline</th><th>Sequence</th><th class="num">Opens</th><th class="num">Clicks</th><th class="num">Replies</th><th>Last contact</th></tr></thead>
           <tbody>
             ${rows
               .map(
                 (row) => `
-                <tr data-tags="${escapeHtml(row.tags)}" data-text="${escapeHtml(`${row.name ?? ""} ${row.company ?? ""} ${row.email}`.toLowerCase())}">
+                <tr data-tags="${escapeHtml(row.tags)}" data-text="${escapeHtml(`${row.name ?? ""} ${row.company ?? ""} ${row.email} ${row.persona ?? ""} ${row.targetRole ?? ""}`.toLowerCase())}">
                   <td><a class="lead-link" href="/dashboard/lead?email=${encodeURIComponent(row.email)}"><strong>${escapeHtml(row.name || row.company || row.email)}</strong></a><div class="mono muted">${escapeHtml(row.email)}${row.company && row.name ? ` · ${escapeHtml(row.company)}` : ""}</div></td>
+                  <td>${row.persona ? `<span class="badge" style="background:rgba(99,102,241,0.15);color:#a5b4fc">${escapeHtml(row.persona)}</span>${row.targetRole ? `<div class="mono muted">${escapeHtml(row.targetRole)}</div>` : ""}` : `<span class="muted">—</span>`}</td>
                   <td>${row.interestLabel ? `<span class="badge" style="background:rgba(52,211,116,0.13);color:#4ade80">${escapeHtml(row.interestLabel)}</span>` : `<span class="muted">—</span>`}</td>
                   <td class="mono">${escapeHtml(row.sequenceLabel ?? "—")}</td>
                   <td class="mono num">${row.opens}</td>
