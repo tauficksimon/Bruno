@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { runOutboundAgent } from "../agents/outboundAgent.js";
+import { KINTA_PERSONA_CAMPAIGNS } from "../campaigns/kintaPersonaCampaigns.js";
 import { env, isProduction } from "../config/env.js";
 import { getConfigValue, isAgentPaused, setAgentPaused } from "../db/config.js";
 import {
@@ -32,6 +33,7 @@ import {
   getOldestQueuedJobAgeMinutes,
   getPendingDraftCount,
   getQueueSummary,
+  listPersonaProfitability,
   listRecentDailyMetrics
 } from "../db/metrics.js";
 import { cachedFetch, deleteCachedValue } from "../db/cache.js";
@@ -296,14 +298,30 @@ export interface CampaignPulse {
   statusLabel: string;
   dailyLimit?: number;
   openTracking?: boolean;
+  linkTracking?: boolean;
   leadCount?: number;
   leadCountCapped?: boolean;
   sent: number;
+  contacted: number;
   opensUnique: number;
   clicks: number;
   repliesUnique: number;
   bounces: number;
   unsubscribes: number;
+  personas: Array<{
+    persona: string;
+    contacted: number;
+    sent: number;
+    repliesUnique: number;
+    positiveReplies?: number;
+    meetings?: number;
+    opportunities: number;
+    closed?: number;
+    bounces: number;
+    openTracking?: boolean;
+    linkTracking?: boolean | null;
+    clicks: number;
+  }>;
   inboxes: Array<{ email: string; todaySent?: number; last7Sent: number; landingRate: number }>;
 }
 
@@ -325,7 +343,7 @@ function campaignStatusLabel(status?: number) {
  */
 async function loadCampaignPulse(): Promise<CampaignPulse | null> {
   try {
-    return await cachedFetch<CampaignPulse | null>("instantly:pulse", 300, async () => {
+    return await cachedFetch<CampaignPulse | null>("instantly:pulse:v2", 300, async () => {
       const campaigns = await listInstantlyCampaigns({ limit: 100 });
       if (campaigns.length === 0) return null;
       const personaCampaigns = campaigns.filter((campaign) => campaign.name.startsWith("Kinta | P"));
@@ -366,21 +384,44 @@ async function loadCampaignPulse(): Promise<CampaignPulse | null> {
         .map((detail) => (detail as unknown as { daily_limit?: number }).daily_limit)
         .filter((limit): limit is number => typeof limit === "number");
       const statuses = new Set(selected.map((campaign) => campaignStatusLabel(campaign.status)));
+      const personaRows = snapshots.flatMap((snapshot) => {
+        if (snapshot.analytics.status !== "fulfilled") return [];
+        const item = snapshot.analytics.value;
+        const detail = snapshot.detail.status === "fulfilled" ? snapshot.detail.value : snapshot.campaign;
+        const config = KINTA_PERSONA_CAMPAIGNS.find((entry) => entry.name === snapshot.campaign.name);
+        return [{
+          persona: config?.persona ?? snapshot.campaign.name,
+          contacted: item.contacted_count,
+          sent: item.emails_sent_count,
+          repliesUnique: item.reply_count_unique,
+          positiveReplies: item.total_interested,
+          meetings: item.total_meeting_booked,
+          opportunities: item.total_opportunities,
+          closed: item.total_closed,
+          bounces: item.bounced_count,
+          openTracking: detail.open_tracking,
+          linkTracking: detail.link_tracking,
+          clicks: item.link_click_count_unique ?? item.link_click_count
+        }];
+      });
 
       return {
         campaignId: selected.length === 1 ? selected[0].id : undefined,
         campaignName: selected.length === 1 ? selected[0].name : `Kinta Persona Portfolio (${selected.length} campaigns)`,
         statusLabel: statuses.size === 1 ? [...statuses][0] : "mixed",
         dailyLimit: dailyLimits.length === selected.length ? dailyLimits.reduce((sum, limit) => sum + limit, 0) : undefined,
-        openTracking: details.some((detail) => (detail as unknown as { open_tracking?: boolean }).open_tracking === true),
+        openTracking: details.length === selected.length ? details.every((detail) => detail.open_tracking === true) : undefined,
+        linkTracking: details.length === selected.length ? details.every((detail) => detail.link_tracking === true) : undefined,
         leadCount: counts.length === selected.length ? counts.reduce((sum, count) => sum + count.count, 0) : undefined,
         leadCountCapped: counts.some((count) => count.capped),
         sent: analytics.reduce((sum, item) => sum + item.emails_sent_count, 0),
+        contacted: analytics.reduce((sum, item) => sum + item.contacted_count, 0),
         opensUnique: analytics.reduce((sum, item) => sum + item.open_count_unique, 0),
         clicks: analytics.reduce((sum, item) => sum + item.link_click_count, 0),
         repliesUnique: analytics.reduce((sum, item) => sum + item.reply_count_unique, 0),
         bounces: analytics.reduce((sum, item) => sum + item.bounced_count, 0),
         unsubscribes: analytics.reduce((sum, item) => sum + item.unsubscribed_count, 0),
+        personas: personaRows,
         inboxes:
           warmup[0].status === "fulfilled"
             ? warmup[0].value.map((w) => ({
@@ -542,16 +583,18 @@ export async function registerDashboard(app: FastifyInstance) {
   // Campaign — is the machine sending, and is it working?
   app.get("/dashboard/campaign", async (request, reply) => {
     if (!authorizePage(request, reply, "/dashboard/campaign")) return reply;
-    const [shell, dailyRows, pulse] = await Promise.all([
+    const [shell, dailyRows, pulse, profitability] = await Promise.all([
       loadShellContext("campaign", "Campaign", true),
       listRecentDailyMetrics(7),
-      loadCampaignPulse()
+      loadCampaignPulse(),
+      listPersonaProfitability()
     ]);
 
     // metrics_daily has one row per (date, campaign); collapse to one row per date.
-    const byDate = new Map<string, { date: string; sends: number; replies: number; bounces: number; positive: number }>();
+    const byDate = new Map<string, { date: string; contacted: number; sends: number; replies: number; bounces: number; positive: number }>();
     for (const row of dailyRows) {
-      const day = byDate.get(row.metric_date) ?? { date: row.metric_date, sends: 0, replies: 0, bounces: 0, positive: 0 };
+      const day = byDate.get(row.metric_date) ?? { date: row.metric_date, contacted: 0, sends: 0, replies: 0, bounces: 0, positive: 0 };
+      day.contacted += row.contacted;
       day.sends += row.sends;
       day.replies += row.replies;
       day.bounces += row.bounces;
@@ -564,12 +607,14 @@ export async function registerDashboard(app: FastifyInstance) {
       renderShell(
         shell,
         renderCampaignPage({
+          contacted7d: daily.reduce((sum, day) => sum + day.contacted, 0),
           sends7d: daily.reduce((sum, day) => sum + day.sends, 0),
           replies7d: daily.reduce((sum, day) => sum + day.replies, 0),
           bounces7d: daily.reduce((sum, day) => sum + day.bounces, 0),
           positive7d: daily.reduce((sum, day) => sum + day.positive, 0),
           daily,
-          pulse: pulse ?? undefined
+          pulse: pulse ?? undefined,
+          profitability
         })
       )
     );

@@ -23,14 +23,30 @@ export interface PulseView {
   statusLabel: string;
   dailyLimit?: number;
   openTracking?: boolean;
+  linkTracking?: boolean;
   leadCount?: number;
   leadCountCapped?: boolean;
   sent: number;
+  contacted: number;
   opensUnique: number;
   clicks: number;
   repliesUnique: number;
   bounces: number;
   unsubscribes: number;
+  personas: Array<{
+    persona: string;
+    contacted: number;
+    sent: number;
+    repliesUnique: number;
+    positiveReplies?: number;
+    meetings?: number;
+    opportunities: number;
+    closed?: number;
+    bounces: number;
+    openTracking?: boolean;
+    linkTracking?: boolean | null;
+    clicks: number;
+  }>;
   inboxes: Array<{ email: string; todaySent?: number; last7Sent: number; landingRate: number }>;
 }
 
@@ -52,14 +68,16 @@ function stepLabel(stepId?: string) {
 
 export function renderPulseStrip(pulse: PulseView) {
   const openRate = ratePercent(pulse.opensUnique, pulse.sent);
-  const replyRate = ratePercent(pulse.repliesUnique, pulse.sent);
+  const replyRate = ratePercent(pulse.repliesUnique, pulse.contacted);
   const items: string[] = [
     `<span class="pulse-item">campaign <strong>${escapeHtml(pulse.statusLabel)}</strong></span>`,
     `<span class="pulse-item"><strong>${pulse.sent}</strong> sent</span>`,
     pulse.openTracking === false
       ? `<span class="pulse-item pulse-dim">opens n/a (tracking off)</span>`
       : `<span class="pulse-item"><strong>${pulse.opensUnique}</strong> opens${openRate ? ` (${openRate})` : ""}</span>`,
-    `<span class="pulse-item"><strong>${pulse.clicks}</strong> clicks</span>`,
+    pulse.linkTracking === false
+      ? `<span class="pulse-item pulse-dim">clicks n/a (tracking off)</span>`
+      : `<span class="pulse-item"><strong>${pulse.clicks}</strong> clicks</span>`,
     `<span class="pulse-item"><strong>${pulse.repliesUnique}</strong> replies${replyRate ? ` (${replyRate})` : ""}</span>`,
     `<span class="pulse-item"><strong>${pulse.bounces}</strong> bounced</span>`
   ];
@@ -632,12 +650,14 @@ export function renderInboxPage(
 // ————— Campaign —————
 
 export interface CampaignModel {
+  contacted7d: number;
   sends7d: number;
   replies7d: number;
   bounces7d: number;
   positive7d: number;
-  daily: Array<{ date: string; sends: number; replies: number; bounces: number }>;
+  daily: Array<{ date: string; contacted: number; sends: number; replies: number; bounces: number }>;
   pulse?: PulseView;
+  profitability: Array<{ persona: string; currency: string; outcomes: number; revenue: number; direct_cost: number; gross_profit: number }>;
 }
 
 function formatPercent(numerator: number, denominator: number) {
@@ -646,7 +666,7 @@ function formatPercent(numerator: number, denominator: number) {
 }
 
 function renderLiveTiles(pulse: PulseView) {
-  const replyRate = ratePercent(pulse.repliesUnique, pulse.sent) ?? "—";
+  const replyRate = ratePercent(pulse.repliesUnique, pulse.contacted) ?? "—";
   const openValue = pulse.openTracking === false ? "off" : String(pulse.opensUnique);
   const openSub =
     pulse.openTracking === false
@@ -678,9 +698,43 @@ function renderLiveTiles(pulse: PulseView) {
       <div class="tile${pulse.bounces > 0 && pulse.sent > 0 && pulse.bounces / pulse.sent > 0.03 ? " tile-bad" : ""}">
         <div class="tile-label">Bounces</div>
         <div class="tile-value">${pulse.bounces}</div>
-        <div class="tile-sub">${pulse.clicks} link clicks · ${pulse.unsubscribes} unsubscribed</div>
+        <div class="tile-sub">${pulse.linkTracking === false ? "link tracking off" : `${pulse.clicks} link clicks`} · ${pulse.unsubscribes} unsubscribed</div>
       </div>
     </section>`;
+}
+
+function renderPersonaPerformance(m: CampaignModel) {
+  if (!m.pulse || m.pulse.personas.length === 0) return "";
+  const profitByPersona = new Map<string, string[]>();
+  for (const row of m.profitability) {
+    const values = profitByPersona.get(row.persona) ?? [];
+    values.push(`${row.currency} ${row.gross_profit.toLocaleString("en-US", { maximumFractionDigits: 2 })}`);
+    profitByPersona.set(row.persona, values);
+  }
+  const rows = m.pulse.personas.map((row) => {
+    const clickRate = row.linkTracking
+      ? formatPercent(row.clicks, row.sent)
+      : "off";
+    return `<tr>
+      <td><strong>${escapeHtml(row.persona)}</strong></td>
+      <td class="mono num">${row.contacted}</td>
+      <td class="mono num">${row.sent}</td>
+      <td class="mono num">${row.repliesUnique} · ${formatPercent(row.repliesUnique, row.contacted)}</td>
+      <td class="mono num">${row.positiveReplies ?? "—"}</td>
+      <td class="mono num">${row.meetings ?? "—"}</td>
+      <td class="mono num">${row.opportunities}</td>
+      <td class="mono num">${row.closed ?? "—"}</td>
+      <td class="mono num">${clickRate}</td>
+      <td class="mono num">${escapeHtml(profitByPersona.get(row.persona)?.join(" · ") ?? "not recorded")}</td>
+    </tr>`;
+  }).join("\n");
+  return `
+    <h2>Persona performance · lifetime</h2>
+    <p class="muted">Reply and conversion rates use contacted leads. Profit is actual revenue minus direct cost; it is never inferred from pipeline value.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Persona</th><th class="num">Contacted</th><th class="num">Sent</th><th class="num">Replies · rate</th><th class="num">Positive</th><th class="num">Meetings</th><th class="num">Opps</th><th class="num">Closed</th><th class="num">CTR</th><th class="num">Gross profit</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
 }
 
 function renderInboxHealthTable(pulse: PulseView) {
@@ -714,13 +768,14 @@ export function renderCampaignPage(m: CampaignModel) {
       : `
       <div class="table-scroll">
         <table>
-          <thead><tr><th>Date</th><th class="num">Sent</th><th class="num">Replies</th><th class="num">Bounces</th></tr></thead>
+          <thead><tr><th>Date</th><th class="num">Contacted</th><th class="num">Sent</th><th class="num">Replies</th><th class="num">Bounces</th></tr></thead>
           <tbody>
             ${m.daily
               .map(
                 (day) => `
                 <tr>
                   <td class="mono">${escapeHtml(day.date)}</td>
+                  <td class="mono num">${day.contacted}</td>
                   <td class="mono num">${day.sends}</td>
                   <td class="mono num">${day.replies}</td>
                   <td class="mono num">${day.bounces}</td>
@@ -745,7 +800,7 @@ export function renderCampaignPage(m: CampaignModel) {
       </div>
       <div class="tile">
         <div class="tile-label">Reply rate · 7d</div>
-        <div class="tile-value">${formatPercent(m.replies7d, m.sends7d)}</div>
+        <div class="tile-value">${formatPercent(m.replies7d, m.contacted7d)}</div>
         <div class="tile-sub">${m.sends7d < 300 ? "too few sends to judge yet (need 300+)" : "golden rule: scale at >3%"}</div>
       </div>
       <div class="tile">
@@ -759,6 +814,7 @@ export function renderCampaignPage(m: CampaignModel) {
   <main class="reveal">
     ${m.pulse ? renderPulseStrip(m.pulse) : ""}
     ${m.pulse ? renderLiveTiles(m.pulse) : fallbackTiles}
+    ${renderPersonaPerformance(m)}
     ${m.pulse ? renderInboxHealthTable(m.pulse) : ""}
     <h2>Last 7 days</h2>
     ${table}

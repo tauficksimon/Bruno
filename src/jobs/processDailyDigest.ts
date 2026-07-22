@@ -30,9 +30,9 @@ export async function processDailyDigestJob(_job: QueueJob) {
   const metricLines =
     metrics.length > 0
       ? metrics.map((row) => {
-          const replyRate = row.sends > 0 ? `${((row.replies / row.sends) * 100).toFixed(1)}%` : "n/a";
+          const replyRate = row.contacted > 0 ? `${((row.replies / row.contacted) * 100).toFixed(1)}%` : "n/a";
           const bounceRate = row.sends > 0 ? `${((row.bounces / row.sends) * 100).toFixed(1)}%` : "n/a";
-          return `${row.metric_date} ${row.campaign_name ?? row.campaign_id ?? "campaign"}: ${row.sends} sent, ${row.replies} replies (${replyRate}), ${row.positive_replies} positive, ${row.bounces} bounces (${bounceRate}), ${row.unsubscribes} unsubscribes`;
+          return `${row.metric_date} ${row.persona ? `[${row.persona}] ` : ""}${row.campaign_name ?? row.campaign_id ?? "campaign"}: ${row.contacted} contacted, ${row.sends} sent, ${row.replies} replies (${replyRate}), ${row.positive_replies} positive, ${row.bounces} bounces (${bounceRate}), ${row.unsubscribes} unsubscribes`;
         })
       : ["No metrics_daily rows yet. Run metrics.rollup after the first live sends."];
 

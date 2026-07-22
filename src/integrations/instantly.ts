@@ -63,6 +63,8 @@ export interface InstantlyCampaign {
   name: string;
   status?: number;
   email_list?: string[];
+  open_tracking?: boolean;
+  link_tracking?: boolean | null;
   timestamp_updated?: string;
 }
 
@@ -155,9 +157,13 @@ export async function getInstantlyCampaign(id: string) {
 export interface InstantlyCampaignAnalyticsOverview {
   open_count: number;
   open_count_unique: number;
+  open_count_unique_by_step?: number;
   reply_count: number;
   reply_count_unique: number;
+  reply_count_unique_by_step?: number;
   link_click_count: number;
+  link_click_count_unique?: number;
+  link_click_count_unique_by_step?: number;
   bounced_count: number;
   unsubscribed_count: number;
   emails_sent_count: number;
@@ -169,6 +175,22 @@ export interface InstantlyCampaignAnalyticsOverview {
   total_meeting_booked?: number;
   total_meeting_completed?: number;
   total_closed?: number;
+}
+
+export interface InstantlyCampaignStepAnalytics {
+  step: string | null;
+  variant: string | null;
+  sent: number;
+  opened: number;
+  unique_opened: number;
+  replies: number;
+  unique_replies: number;
+  replies_automatic: number;
+  unique_replies_automatic: number;
+  clicks: number;
+  unique_clicks: number;
+  opportunities?: number;
+  unique_opportunities?: number;
 }
 
 /** Aggregate performance for one campaign (sent, opens, replies, bounces, opportunities). */
@@ -184,6 +206,26 @@ export async function getCampaignAnalyticsOverview(
     })}`
   );
   return response as InstantlyCampaignAnalyticsOverview;
+}
+
+/** Per-step and A/Z-variant performance for one campaign. */
+export async function getCampaignStepAnalytics(input: {
+  campaignId: string;
+  startDate?: string;
+  endDate?: string;
+}) {
+  const response = await instantlyFetch(
+    `/api/v2/campaigns/analytics/steps${queryString({
+      campaign_id: input.campaignId,
+      start_date: input.startDate,
+      end_date: input.endDate,
+      include_opportunities_count: true
+    })}`
+  );
+  if (!Array.isArray(response)) {
+    throw new Error("Instantly API returned an unexpected step analytics response");
+  }
+  return response as InstantlyCampaignStepAnalytics[];
 }
 
 export interface InstantlyEmailSummary {
@@ -602,10 +644,31 @@ export async function sendReplyEmail(input: {
       eaccount: input.eaccount,
       subject: input.subject,
       body: {
-        text: input.bodyText
+        text: input.bodyText,
+        html: plainTextToEmailHtml(input.bodyText)
       }
     })
   });
+}
+
+/** Preserve human-authored paragraphs in clients that render the HTML body. */
+export function plainTextToEmailHtml(text: string) {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return "";
+
+  return normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeEmailHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function escapeEmailHtml(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 export async function stopLeadSequence(input: { email?: string; leadId?: string; campaignId?: string }) {
